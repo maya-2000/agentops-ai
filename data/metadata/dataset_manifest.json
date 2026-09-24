@@ -1,0 +1,42 @@
+{
+  "dataset_name": "Northwind Cloud",
+  "dataset_version": "1.0.0",
+  "random_seed": 42,
+  "generation_timestamp": "2026-09-24T16:36:37+00:00",
+  "period_start": "2024-09-01",
+  "period_end": "2026-08-31",
+  "currency": "SGD",
+  "customer_count": 5000,
+  "region_count": 4,
+  "country_count": 13,
+  "segment_count": 3,
+  "plan_count": 4,
+  "sales_rep_count": 20,
+  "tables": {
+    "customers": {
+      "row_count": 5000
+    },
+    "subscriptions": {
+      "row_count": 7045
+    },
+    "usage_events": {
+      "row_count": 306287
+    },
+    "sales_opportunities": {
+      "row_count": 12537
+    },
+    "support_tickets": {
+      "row_count": 55265
+    },
+    "marketing_campaigns": {
+      "row_count": 555
+    },
+    "daily_revenue": {
+      "row_count": 2395948
+    },
+    "product_features": {
+      "row_count": 8213
+    }
+  },
+  "schema_version": "1.0.0"
+}

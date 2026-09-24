@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- AgentOps generated artifacts ----------------------------------------------------
+# Rebuild with: python -m data.generator.generate
+database/*.duckdb
+database/*.duckdb.wal
+data/seeds/parquet/

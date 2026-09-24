@@ -1,0 +1,39 @@
+{
+  "dataset_version": "1.0.0",
+  "random_seed": 42,
+  "fingerprint_sha256": "2a6dfe5953d818274a61b3df47767660923f95cda04d5733194a5553e4d6bac7",
+  "tables": {
+    "customers": {
+      "row_count": 5000,
+      "md5": "ae296390571d37b45d4d73eb6106855a"
+    },
+    "subscriptions": {
+      "row_count": 7045,
+      "md5": "29949c275b6111031522668f90b3b7df"
+    },
+    "usage_events": {
+      "row_count": 306287,
+      "md5": "7f960adf86e1086cf35fbbbf571dbb18"
+    },
+    "sales_opportunities": {
+      "row_count": 12537,
+      "md5": "2df3cd3c86addb32f8c8fccba7d3ebe2"
+    },
+    "support_tickets": {
+      "row_count": 55265,
+      "md5": "691cd0d3d3600db76101f8bf0d1ccfdf"
+    },
+    "marketing_campaigns": {
+      "row_count": 555,
+      "md5": "76a41da314a67bb839b098dc67fac9af"
+    },
+    "daily_revenue": {
+      "row_count": 2395948,
+      "md5": "1c36827b30cecf2586c054b6e5aebedf"
+    },
+    "product_features": {
+      "row_count": 8213,
+      "md5": "da25c7e661c2b4c3e8ff0ef7d4b08933"
+    }
+  }
+}
