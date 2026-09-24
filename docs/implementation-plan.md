@@ -1,6 +1,6 @@
 # AgentOps — Implementation Plan (Phase 0)
 
-> Status: **Draft for approval.** No application code is written until this plan is approved.
+> Status: **Approved.** Phase 1 implemented (see §22 for implementation notes).
 > Date: 2026-09-24
 
 ---
@@ -115,7 +115,7 @@ LLM_PROVIDER=offline          # offline | anthropic | openai
 LLM_MODEL=                    # e.g. a Claude or GPT model id; ignored for offline
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
-DATABASE_URL=duckdb:///data/agentops.duckdb
+DATABASE_URL=duckdb:///database/northwind_cloud.duckdb
 API_URL=http://localhost:8000
 AS_OF_DATE=2026-08-31         # "today" for the synthetic business
 SQL_ROW_LIMIT=1000
@@ -479,3 +479,30 @@ After each phase: run tests → inspect outputs → fix → update docs → comm
 2. **Offline deterministic LLM provider as default**; Anthropic and OpenAI providers available as extras.
 3. **Synthetic company "Northwind Cloud", currency SGD, data window Sep 2024 – Aug 2026, as-of date 2026-08-31.**
 4. **MCP transport: stdio** (Streamable HTTP could be added later).
+
+---
+
+## 22. Implementation notes
+
+### Phase 1 (data generation and database foundation) — complete
+
+The architecture and design decisions above are unchanged. Phase 1 made the following
+refinements; each is recorded here so the plan and the code agree:
+
+| Topic | Plan | Implemented | Reason |
+|---|---|---|---|
+| Database file | `data/agentops.duckdb` | `database/northwind_cloud.duckdb` | Path requested in the Phase 1 brief; `.env.example` updated |
+| Build command | `scripts/init_db.py` | `python -m data.generator.generate` | One CLI covers generation, loading, validation and metadata |
+| `subscription_events`, `monthly_mrr` | Separate table and materialised snapshot | Views `v_subscription_events` and `v_monthly_mrr` derived from the versioned `subscriptions` table | Single source of truth; keeps the manifest's required 8-table template; performance is adequate (materialise later if needed) |
+| KPI-style views (`v_churn_monthly`, `v_rep_performance`, `v_support_monthly`, ...) | Phase 1 | Deferred to the Phase 2 KPI framework | Churn, win-rate and similar formulas are KPI definitions and belong in the KPI registry, not in ad-hoc views |
+| Extra observable columns | — | `customers.status`, `subscriptions.seats` / `change_type`, `sales_opportunities.opportunity_type` / `segment` / `region` / `furthest_stage`, `support_tickets.status`, `daily_revenue.revenue_type` | Needed for realistic analysis (seat-based pricing, funnel drop-off, rep-by-segment analysis, prospects without a customer record, revenue vs MRR) |
+| Marketing and usage grain | Unspecified | Weekly (Monday week start) | Enough resolution for trend and anomaly work without daily noise on small counts |
+| Parquet step | Generate Parquet, then load DuckDB | Load DuckDB, then export Parquet with DuckDB `COPY` | Avoids a pyarrow dependency |
+| Scale | ~30k opportunities, ~40k tickets | ~12.5k opportunities, ~55k tickets, ~2.4M revenue rows | Emerged from calibrated behaviour rather than targets |
+| Test fixtures | Small dataset only | Small fixture (100 customers, 6 months) plus the full configuration built in a temp dir (~30 s) | The injected events are statistical and only reliably detectable at full scale |
+| Dependencies | Full list up front | Added per phase (Phase 1: duckdb, numpy, pandas, pydantic, pydantic-settings, sqlglot) | No unused dependencies |
+| Line length | 100 | 120 | SQL-heavy modules |
+
+Lineage foundation: `app/database/lineage.py` (`DatasetInfo`, `LineageRecord`, query and
+tool-run IDs, sqlglot-based source-table extraction). Every `Database.query()` result carries
+a `LineageRecord`.
