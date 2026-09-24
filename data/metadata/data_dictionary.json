@@ -1,0 +1,898 @@
+{
+  "schema_version": "1.0.0",
+  "tables": [
+    {
+      "name": "customers",
+      "business_purpose": "Master record for every customer account (company) that has ever held a subscription, including accounts acquired before the reporting window.",
+      "grain": "One row per customer account.",
+      "primary_key": [
+        "customer_id"
+      ],
+      "columns": [
+        {
+          "name": "customer_id",
+          "sql_type": "VARCHAR",
+          "description": "Stable unique customer identifier.",
+          "nullable": false,
+          "expected_values": "Format CUST-000001; assigned in signup order.",
+          "business_meaning": "Join key used across all customer-level tables.",
+          "pii": false
+        },
+        {
+          "name": "company_name",
+          "sql_type": "VARCHAR",
+          "description": "Legal name of the customer company (synthetic).",
+          "nullable": false,
+          "expected_values": "Unique, synthetic company names with a country-specific legal suffix.",
+          "business_meaning": "Human-readable account name for reporting.",
+          "pii": false
+        },
+        {
+          "name": "country",
+          "sql_type": "VARCHAR",
+          "description": "Country of the customer's billing entity.",
+          "nullable": false,
+          "allowed_values": [
+            "Singapore",
+            "Australia",
+            "Japan",
+            "India",
+            "Indonesia",
+            "United Kingdom",
+            "Germany",
+            "France",
+            "Netherlands",
+            "United States",
+            "Canada",
+            "Brazil",
+            "Mexico"
+          ],
+          "business_meaning": "Geographic market; Singapore is the headquarters market.",
+          "pii": false
+        },
+        {
+          "name": "region",
+          "sql_type": "VARCHAR",
+          "description": "Sales region derived from country.",
+          "nullable": false,
+          "allowed_values": [
+            "APAC",
+            "EMEA",
+            "North America",
+            "LATAM"
+          ],
+          "business_meaning": "Territory used for sales coverage and regional P&L.",
+          "pii": false
+        },
+        {
+          "name": "industry",
+          "sql_type": "VARCHAR",
+          "description": "Customer's primary industry.",
+          "nullable": false,
+          "allowed_values": [
+            "Fintech",
+            "Retail & E-commerce",
+            "Healthcare",
+            "Logistics",
+            "Manufacturing",
+            "Media & Entertainment",
+            "Education",
+            "Professional Services"
+          ],
+          "business_meaning": "Vertical used for segmentation and marketing targeting.",
+          "pii": false
+        },
+        {
+          "name": "company_size",
+          "sql_type": "VARCHAR",
+          "description": "Employee-count band of the customer company.",
+          "nullable": false,
+          "allowed_values": [
+            "1-50",
+            "51-200",
+            "201-1000",
+            "1001-5000",
+            "5000+"
+          ],
+          "business_meaning": "Determines segment: 1-200 SMB, 201-1000 Mid-Market, 1001+ Enterprise.",
+          "pii": false
+        },
+        {
+          "name": "segment",
+          "sql_type": "VARCHAR",
+          "description": "Commercial segment derived from company size.",
+          "nullable": false,
+          "allowed_values": [
+            "SMB",
+            "Mid-Market",
+            "Enterprise"
+          ],
+          "business_meaning": "Primary segmentation for pricing, sales motion and reporting.",
+          "pii": false
+        },
+        {
+          "name": "acquisition_channel",
+          "sql_type": "VARCHAR",
+          "description": "Channel that sourced the customer.",
+          "nullable": false,
+          "allowed_values": [
+            "Paid Search",
+            "Paid Social",
+            "Email",
+            "Organic",
+            "Partner",
+            "Events",
+            "Outbound Sales",
+            "Referral"
+          ],
+          "business_meaning": "Marketing channels match marketing_campaigns.channel; 'Outbound Sales' and 'Referral' have no campaign spend.",
+          "pii": false
+        },
+        {
+          "name": "signup_date",
+          "sql_type": "DATE",
+          "description": "Date the first subscription started.",
+          "nullable": false,
+          "expected_values": "2021-01-01 to the dataset end date.",
+          "business_meaning": "Start of the customer relationship; basis for cohorts and tenure.",
+          "pii": false
+        },
+        {
+          "name": "status",
+          "sql_type": "VARCHAR",
+          "description": "Account status as of the dataset end date.",
+          "nullable": false,
+          "allowed_values": [
+            "active",
+            "churned"
+          ],
+          "business_meaning": "'churned' means no active subscription at the dataset end date.",
+          "pii": false
+        }
+      ]
+    },
+    {
+      "name": "subscriptions",
+      "business_purpose": "Versioned subscription history. A new record starts whenever a customer's contracted MRR changes (expansion or contraction); the prior record is closed as 'superseded'. Churn closes the final record with status 'churned'.",
+      "grain": "One row per customer subscription period with constant plan, seats and MRR.",
+      "primary_key": [
+        "subscription_id"
+      ],
+      "columns": [
+        {
+          "name": "subscription_id",
+          "sql_type": "VARCHAR",
+          "description": "Unique subscription record identifier.",
+          "nullable": false,
+          "expected_values": "Format SUB-0000001.",
+          "pii": false
+        },
+        {
+          "name": "customer_id",
+          "sql_type": "VARCHAR",
+          "description": "Customer holding the subscription.",
+          "nullable": false,
+          "foreign_key": {
+            "table": "customers",
+            "column": "customer_id"
+          },
+          "pii": false
+        },
+        {
+          "name": "plan",
+          "sql_type": "VARCHAR",
+          "description": "Subscription plan (price tier).",
+          "nullable": false,
+          "allowed_values": [
+            "Starter",
+            "Growth",
+            "Professional",
+            "Enterprise"
+          ],
+          "business_meaning": "Starter < Growth < Professional < Enterprise in price and features.",
+          "pii": false
+        },
+        {
+          "name": "seats",
+          "sql_type": "INTEGER",
+          "description": "Number of licensed user seats.",
+          "nullable": false,
+          "expected_values": "Positive integer.",
+          "business_meaning": "Main pricing driver: MRR is approximately seats x plan price per seat.",
+          "pii": false
+        },
+        {
+          "name": "monthly_recurring_revenue",
+          "sql_type": "DECIMAL(14,2)",
+          "description": "Contracted MRR in SGD for this subscription period.",
+          "nullable": false,
+          "expected_values": ">= 0",
+          "business_meaning": "Recurring revenue while this record is in force.",
+          "pii": false
+        },
+        {
+          "name": "start_date",
+          "sql_type": "DATE",
+          "description": "First day this subscription record is in force.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "end_date",
+          "sql_type": "DATE",
+          "description": "Last day this subscription record is in force; NULL while active.",
+          "nullable": true,
+          "expected_values": ">= start_date; NULL only when status = 'active'.",
+          "business_meaning": "For churned records this is the last day of service.",
+          "pii": false
+        },
+        {
+          "name": "status",
+          "sql_type": "VARCHAR",
+          "description": "Record status as of the dataset end date.",
+          "nullable": false,
+          "allowed_values": [
+            "active",
+            "superseded",
+            "churned"
+          ],
+          "business_meaning": "'active' = in force; 'superseded' = replaced by a later record for the same customer (expansion/contraction); 'churned' = customer cancelled.",
+          "pii": false
+        },
+        {
+          "name": "change_type",
+          "sql_type": "VARCHAR",
+          "description": "How this record began.",
+          "nullable": false,
+          "allowed_values": [
+            "new",
+            "expansion",
+            "contraction"
+          ],
+          "business_meaning": "'new' = first subscription; 'expansion' / 'contraction' = MRR increased / decreased versus previous_mrr.",
+          "pii": false
+        },
+        {
+          "name": "previous_mrr",
+          "sql_type": "DECIMAL(14,2)",
+          "description": "Customer MRR immediately before this record started (0 for new customers).",
+          "nullable": false,
+          "expected_values": ">= 0",
+          "business_meaning": "MRR movement at start = monthly_recurring_revenue - previous_mrr.",
+          "pii": false
+        },
+        {
+          "name": "current_mrr",
+          "sql_type": "DECIMAL(14,2)",
+          "description": "MRR contributed by this record as of the dataset end date.",
+          "nullable": false,
+          "expected_values": "= monthly_recurring_revenue when status = 'active', otherwise 0.",
+          "business_meaning": "SUM(current_mrr) gives total MRR at the dataset end date.",
+          "pii": false
+        }
+      ]
+    },
+    {
+      "name": "usage_events",
+      "business_purpose": "Weekly product-usage telemetry per customer account.",
+      "grain": "One row per customer per week (weeks start on Monday). A week is recorded when the customer was subscribed for at least 4 of its 7 days.",
+      "primary_key": [
+        "event_id"
+      ],
+      "columns": [
+        {
+          "name": "event_id",
+          "sql_type": "BIGINT",
+          "description": "Unique usage record identifier.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "customer_id",
+          "sql_type": "VARCHAR",
+          "description": "Customer account.",
+          "nullable": false,
+          "foreign_key": {
+            "table": "customers",
+            "column": "customer_id"
+          },
+          "pii": false
+        },
+        {
+          "name": "event_date",
+          "sql_type": "DATE",
+          "description": "Monday that starts the usage week.",
+          "nullable": false,
+          "business_meaning": "Weekly time key for usage trend analysis.",
+          "pii": false
+        },
+        {
+          "name": "active_users",
+          "sql_type": "INTEGER",
+          "description": "Distinct users active during the week (weekly active users).",
+          "nullable": false,
+          "expected_values": "0 <= active_users <= licensed seats.",
+          "business_meaning": "Core engagement measure; declining values signal disengagement.",
+          "pii": false
+        },
+        {
+          "name": "sessions",
+          "sql_type": "INTEGER",
+          "description": "Number of user sessions during the week.",
+          "nullable": false,
+          "expected_values": ">= 0",
+          "pii": false
+        },
+        {
+          "name": "api_calls",
+          "sql_type": "BIGINT",
+          "description": "API calls made during the week.",
+          "nullable": false,
+          "expected_values": ">= 0; always 0 on the Starter plan (no API access).",
+          "business_meaning": "Drives usage (overage) revenue above the plan's included quota.",
+          "pii": false
+        },
+        {
+          "name": "feature_usage",
+          "sql_type": "INTEGER",
+          "description": "Number of distinct product features used during the week.",
+          "nullable": false,
+          "expected_values": "0 to 12 (bounded by the features available on the plan).",
+          "business_meaning": "Breadth of adoption; broader usage indicates deeper product fit.",
+          "pii": false
+        }
+      ]
+    },
+    {
+      "name": "sales_opportunities",
+      "business_purpose": "CRM opportunities for sales-assisted deals: new business (prospects and won customers) and expansion of existing accounts.",
+      "grain": "One row per opportunity.",
+      "primary_key": [
+        "opportunity_id"
+      ],
+      "columns": [
+        {
+          "name": "opportunity_id",
+          "sql_type": "VARCHAR",
+          "description": "Unique opportunity identifier.",
+          "nullable": false,
+          "expected_values": "Format OPP-000001.",
+          "pii": false
+        },
+        {
+          "name": "customer_id",
+          "sql_type": "VARCHAR",
+          "description": "Customer account; NULL for new-business prospects that have not become customers.",
+          "nullable": true,
+          "foreign_key": {
+            "table": "customers",
+            "column": "customer_id"
+          },
+          "business_meaning": "Populated for all won and expansion opportunities.",
+          "pii": false
+        },
+        {
+          "name": "sales_rep",
+          "sql_type": "VARCHAR",
+          "description": "Sales representative who owns the opportunity (synthetic name).",
+          "nullable": false,
+          "business_meaning": "Owner used for rep-level performance analysis.",
+          "pii": true
+        },
+        {
+          "name": "opportunity_type",
+          "sql_type": "VARCHAR",
+          "description": "Deal type.",
+          "nullable": false,
+          "allowed_values": [
+            "New Business",
+            "Expansion"
+          ],
+          "pii": false
+        },
+        {
+          "name": "segment",
+          "sql_type": "VARCHAR",
+          "description": "Segment of the prospect or customer.",
+          "nullable": false,
+          "allowed_values": [
+            "SMB",
+            "Mid-Market",
+            "Enterprise"
+          ],
+          "pii": false
+        },
+        {
+          "name": "region",
+          "sql_type": "VARCHAR",
+          "description": "Sales region (rep territory).",
+          "nullable": false,
+          "allowed_values": [
+            "APAC",
+            "EMEA",
+            "North America",
+            "LATAM"
+          ],
+          "pii": false
+        },
+        {
+          "name": "created_date",
+          "sql_type": "DATE",
+          "description": "Date the opportunity was created.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "close_date",
+          "sql_type": "DATE",
+          "description": "Date the opportunity was won or lost; NULL while open.",
+          "nullable": true,
+          "expected_values": ">= created_date; within the reporting window.",
+          "pii": false
+        },
+        {
+          "name": "stage",
+          "sql_type": "VARCHAR",
+          "description": "Current stage (final stage for closed opportunities).",
+          "nullable": false,
+          "allowed_values": [
+            "Lead",
+            "Qualified",
+            "Proposal",
+            "Negotiation",
+            "Won",
+            "Lost"
+          ],
+          "business_meaning": "Lead -> Qualified -> Proposal -> Negotiation -> Won; Lost can occur at any stage.",
+          "pii": false
+        },
+        {
+          "name": "furthest_stage",
+          "sql_type": "VARCHAR",
+          "description": "Furthest funnel stage reached (for lost deals: the stage at which the deal was lost).",
+          "nullable": false,
+          "allowed_values": [
+            "Lead",
+            "Qualified",
+            "Proposal",
+            "Negotiation",
+            "Won"
+          ],
+          "business_meaning": "Enables stage-to-stage conversion and drop-off analysis.",
+          "pii": false
+        },
+        {
+          "name": "deal_value",
+          "sql_type": "DECIMAL(14,2)",
+          "description": "Annual contract value (SGD) of the opportunity.",
+          "nullable": false,
+          "expected_values": "> 0. For won deals = 12 x MRR added.",
+          "pii": false
+        },
+        {
+          "name": "probability",
+          "sql_type": "DECIMAL(4,2)",
+          "description": "CRM win probability for the current stage.",
+          "nullable": false,
+          "expected_values": "Lead 0.10, Qualified 0.25, Proposal 0.50, Negotiation 0.75, Won 1.00, Lost 0.00.",
+          "business_meaning": "Used to weight open pipeline.",
+          "pii": false
+        }
+      ]
+    },
+    {
+      "name": "support_tickets",
+      "business_purpose": "Customer support tickets with priority, category, resolution and sentiment.",
+      "grain": "One row per support ticket.",
+      "primary_key": [
+        "ticket_id"
+      ],
+      "columns": [
+        {
+          "name": "ticket_id",
+          "sql_type": "VARCHAR",
+          "description": "Unique ticket identifier.",
+          "nullable": false,
+          "expected_values": "Format TCK-0000001.",
+          "pii": false
+        },
+        {
+          "name": "customer_id",
+          "sql_type": "VARCHAR",
+          "description": "Customer that raised the ticket.",
+          "nullable": false,
+          "foreign_key": {
+            "table": "customers",
+            "column": "customer_id"
+          },
+          "pii": false
+        },
+        {
+          "name": "created_at",
+          "sql_type": "TIMESTAMP",
+          "description": "When the ticket was opened.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "resolved_at",
+          "sql_type": "TIMESTAMP",
+          "description": "When the ticket was resolved; NULL if still open at the dataset end.",
+          "nullable": true,
+          "expected_values": ">= created_at",
+          "pii": false
+        },
+        {
+          "name": "priority",
+          "sql_type": "VARCHAR",
+          "description": "Ticket priority.",
+          "nullable": false,
+          "allowed_values": [
+            "Low",
+            "Medium",
+            "High",
+            "Urgent"
+          ],
+          "pii": false
+        },
+        {
+          "name": "category",
+          "sql_type": "VARCHAR",
+          "description": "Ticket category.",
+          "nullable": false,
+          "allowed_values": [
+            "How-To",
+            "Bug",
+            "Integration",
+            "Performance",
+            "Billing",
+            "Account Access",
+            "Feature Request"
+          ],
+          "pii": false
+        },
+        {
+          "name": "status",
+          "sql_type": "VARCHAR",
+          "description": "Ticket status at the dataset end date.",
+          "nullable": false,
+          "allowed_values": [
+            "Open",
+            "Resolved"
+          ],
+          "pii": false
+        },
+        {
+          "name": "resolution_time",
+          "sql_type": "DOUBLE",
+          "description": "Hours from creation to resolution; NULL while open.",
+          "nullable": true,
+          "expected_values": "> 0 hours",
+          "business_meaning": "Service-level measure; long resolution times hurt customer experience.",
+          "pii": false
+        },
+        {
+          "name": "sentiment",
+          "sql_type": "VARCHAR",
+          "description": "Customer sentiment classified from the ticket conversation.",
+          "nullable": false,
+          "allowed_values": [
+            "Positive",
+            "Neutral",
+            "Negative"
+          ],
+          "pii": false
+        }
+      ]
+    },
+    {
+      "name": "marketing_campaigns",
+      "business_purpose": "Weekly marketing campaign performance: spend and funnel metrics.",
+      "grain": "One row per campaign per week (weeks start on Monday).",
+      "primary_key": [
+        "campaign_id",
+        "date"
+      ],
+      "columns": [
+        {
+          "name": "campaign_id",
+          "sql_type": "VARCHAR",
+          "description": "Campaign identifier.",
+          "nullable": false,
+          "expected_values": "Format CMP-001.",
+          "pii": false
+        },
+        {
+          "name": "campaign_name",
+          "sql_type": "VARCHAR",
+          "description": "Descriptive campaign name (channel | theme | quarter).",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "channel",
+          "sql_type": "VARCHAR",
+          "description": "Marketing channel.",
+          "nullable": false,
+          "allowed_values": [
+            "Paid Search",
+            "Paid Social",
+            "Email",
+            "Organic",
+            "Partner",
+            "Events"
+          ],
+          "pii": false
+        },
+        {
+          "name": "date",
+          "sql_type": "DATE",
+          "description": "Monday that starts the reporting week.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "spend",
+          "sql_type": "DECIMAL(14,2)",
+          "description": "Media / programme spend in SGD for the week.",
+          "nullable": false,
+          "expected_values": ">= 0",
+          "pii": false
+        },
+        {
+          "name": "impressions",
+          "sql_type": "BIGINT",
+          "description": "Ad impressions, sends or content views.",
+          "nullable": false,
+          "expected_values": ">= clicks",
+          "pii": false
+        },
+        {
+          "name": "clicks",
+          "sql_type": "BIGINT",
+          "description": "Clicks or engaged visits.",
+          "nullable": false,
+          "expected_values": ">= leads",
+          "pii": false
+        },
+        {
+          "name": "leads",
+          "sql_type": "INTEGER",
+          "description": "Marketing-qualified leads generated.",
+          "nullable": false,
+          "expected_values": ">= conversions",
+          "pii": false
+        },
+        {
+          "name": "conversions",
+          "sql_type": "INTEGER",
+          "description": "Leads that became paying customers during the week.",
+          "nullable": false,
+          "expected_values": ">= 0",
+          "business_meaning": "Each conversion corresponds to one customer with acquisition_channel = channel and a signup_date in the same week.",
+          "pii": false
+        }
+      ]
+    },
+    {
+      "name": "daily_revenue",
+      "business_purpose": "Daily recognised revenue per customer. Subscription revenue is recognised daily as MRR x 12 / 365; usage revenue is API overage above the plan quota, recognised evenly across the customer's active days in the month.",
+      "grain": "One row per customer per day per revenue type.",
+      "primary_key": [
+        "date",
+        "customer_id",
+        "revenue_type"
+      ],
+      "columns": [
+        {
+          "name": "date",
+          "sql_type": "DATE",
+          "description": "Revenue recognition date.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "customer_id",
+          "sql_type": "VARCHAR",
+          "description": "Customer account.",
+          "nullable": false,
+          "foreign_key": {
+            "table": "customers",
+            "column": "customer_id"
+          },
+          "pii": false
+        },
+        {
+          "name": "region",
+          "sql_type": "VARCHAR",
+          "description": "Customer region (denormalised for reporting).",
+          "nullable": false,
+          "allowed_values": [
+            "APAC",
+            "EMEA",
+            "North America",
+            "LATAM"
+          ],
+          "pii": false
+        },
+        {
+          "name": "segment",
+          "sql_type": "VARCHAR",
+          "description": "Customer segment (denormalised).",
+          "nullable": false,
+          "allowed_values": [
+            "SMB",
+            "Mid-Market",
+            "Enterprise"
+          ],
+          "pii": false
+        },
+        {
+          "name": "plan",
+          "sql_type": "VARCHAR",
+          "description": "Plan in force on this date.",
+          "nullable": false,
+          "allowed_values": [
+            "Starter",
+            "Growth",
+            "Professional",
+            "Enterprise"
+          ],
+          "pii": false
+        },
+        {
+          "name": "revenue_type",
+          "sql_type": "VARCHAR",
+          "description": "Revenue stream.",
+          "nullable": false,
+          "allowed_values": [
+            "subscription",
+            "usage"
+          ],
+          "pii": false
+        },
+        {
+          "name": "revenue",
+          "sql_type": "DECIMAL(14,2)",
+          "description": "Revenue recognised on this date in SGD.",
+          "nullable": false,
+          "expected_values": ">= 0",
+          "business_meaning": "SUM over a period gives recognised revenue for that period.",
+          "pii": false
+        }
+      ]
+    },
+    {
+      "name": "product_features",
+      "business_purpose": "Daily feature-level adoption across the whole customer base.",
+      "grain": "One row per feature per day, from the feature's launch date onwards.",
+      "primary_key": [
+        "feature_id",
+        "date"
+      ],
+      "columns": [
+        {
+          "name": "feature_id",
+          "sql_type": "VARCHAR",
+          "description": "Feature identifier.",
+          "nullable": false,
+          "expected_values": "Format F01-F12.",
+          "pii": false
+        },
+        {
+          "name": "feature_name",
+          "sql_type": "VARCHAR",
+          "description": "Feature name.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "date",
+          "sql_type": "DATE",
+          "description": "Calendar date.",
+          "nullable": false,
+          "pii": false
+        },
+        {
+          "name": "active_users",
+          "sql_type": "INTEGER",
+          "description": "Users who used the feature on this date.",
+          "nullable": false,
+          "expected_values": ">= 0",
+          "pii": false
+        },
+        {
+          "name": "adoption_rate",
+          "sql_type": "DOUBLE",
+          "description": "Share of the platform's daily active users who used the feature.",
+          "nullable": false,
+          "expected_values": "0 to 1",
+          "business_meaning": "Feature penetration; rising values indicate successful adoption.",
+          "pii": false
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "v_monthly_revenue",
+      "description": "Recognised revenue by calendar month, region, segment, plan and revenue type.",
+      "source_tables": [
+        "daily_revenue"
+      ]
+    },
+    {
+      "name": "v_monthly_mrr",
+      "description": "Month-end MRR snapshot per customer: subscriptions in force on the last day of each month in the reporting window.",
+      "source_tables": [
+        "subscriptions",
+        "customers",
+        "daily_revenue"
+      ]
+    },
+    {
+      "name": "v_subscription_events",
+      "description": "Subscription movements derived from the versioned subscriptions table: new, expansion, contraction (at record start) and churn (at the last day of service).",
+      "source_tables": [
+        "subscriptions"
+      ]
+    },
+    {
+      "name": "v_campaign_summary",
+      "description": "Campaign-level totals of spend and funnel volumes across all active weeks.",
+      "source_tables": [
+        "marketing_campaigns"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "parent": "customers",
+      "child": "subscriptions",
+      "label": "has",
+      "optional_parent": false,
+      "logical": false,
+      "join": "customer_id"
+    },
+    {
+      "parent": "customers",
+      "child": "usage_events",
+      "label": "generates",
+      "optional_parent": false,
+      "logical": false,
+      "join": "customer_id"
+    },
+    {
+      "parent": "customers",
+      "child": "sales_opportunities",
+      "label": "is sold through",
+      "optional_parent": true,
+      "logical": false,
+      "join": "customer_id"
+    },
+    {
+      "parent": "customers",
+      "child": "support_tickets",
+      "label": "submits",
+      "optional_parent": false,
+      "logical": false,
+      "join": "customer_id"
+    },
+    {
+      "parent": "customers",
+      "child": "daily_revenue",
+      "label": "generates",
+      "optional_parent": false,
+      "logical": false,
+      "join": "customer_id"
+    },
+    {
+      "parent": "marketing_campaigns",
+      "child": "customers",
+      "label": "acquires",
+      "optional_parent": true,
+      "logical": true,
+      "join": "marketing_campaigns.channel = customers.acquisition_channel (same week as signup_date)"
+    }
+  ]
+}

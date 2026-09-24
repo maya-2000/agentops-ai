@@ -1,0 +1,373 @@
+{
+  "purpose": "Ground truth for evaluation only. NOT part of the agent-facing database and must never be exposed to the agent.",
+  "dataset_version": "1.0.0",
+  "random_seed": 42,
+  "parameters": {
+    "e1_sg_enterprise_churn": {
+      "month": "2026-08-01",
+      "country": "Singapore",
+      "segment": "Enterprise",
+      "churn_share": 0.2,
+      "contraction_share": 0.3,
+      "contraction_factor": [
+        0.55,
+        0.8
+      ],
+      "last_service_day_window": [
+        "2026-08-01",
+        "2026-08-12"
+      ],
+      "mid_market_churn_multiplier": 2.0,
+      "billing_ticket_rate": {
+        "7": 0.6,
+        "8": 0.4
+      }
+    },
+    "e2_support_spike": {
+      "start": "2026-06-08",
+      "end": "2026-07-24",
+      "category_multipliers": {
+        "Bug": 2.6,
+        "Integration": 2.0,
+        "Performance": 1.4
+      },
+      "resolution_time_factor": 1.7,
+      "engagement_shock": 0.4
+    },
+    "e3_paid_social": {
+      "channel": "Paid Social",
+      "quarter_start": "2026-04-01",
+      "theme": "Brand Awareness Video",
+      "spend_multiplier": 1.6,
+      "lead_quality": 0.38
+    },
+    "e4_low_conversion_rep": {
+      "stage_conversion_factor": 0.85,
+      "excluded_regions": [
+        "LATAM"
+      ]
+    },
+    "e5_ai_insights": {
+      "launch_date": "2026-03-02",
+      "feature_id": "F12",
+      "feature_name": "AI Insights",
+      "eligible_plans": {
+        "Growth": 0.35,
+        "Professional": 1.0,
+        "Enterprise": 1.0
+      },
+      "monthly_adoption_hazard": 0.16
+    },
+    "e6_smb_churn": {
+      "segment": "SMB"
+    },
+    "e7_pre_churn_decline": {
+      "selection_date": "2026-03-31",
+      "drift_start": "2026-04-01",
+      "cohort_share": 0.03,
+      "min_tenure_months": 6,
+      "monthly_engagement_drift": 0.3,
+      "late_churn_logit_boost": 1.0,
+      "late_churn_months": [
+        "2026-07-01",
+        "2026-08-01"
+      ]
+    }
+  },
+  "events": [
+    {
+      "name": "Singapore Enterprise churn wave",
+      "description": "In August 2026 a cluster of Singapore Enterprise accounts churned at renewal and several others contracted, preceded by Billing complaints in July-August.",
+      "expected_signals": "August 2026 revenue/MRR decline; Singapore and Enterprise are the largest negative contributors; SG Enterprise logo churn far above its baseline; Billing tickets with negative sentiment from SG Enterprise accounts.",
+      "event_id": "E1",
+      "injected": true,
+      "period_start": "2026-08-01",
+      "period_end": "2026-08-12",
+      "details": {
+        "churned_customer_ids": [
+          "CUST-000020",
+          "CUST-000763",
+          "CUST-000782",
+          "CUST-000808",
+          "CUST-000821",
+          "CUST-000830",
+          "CUST-001514",
+          "CUST-001555",
+          "CUST-001601",
+          "CUST-001623",
+          "CUST-001701",
+          "CUST-001732",
+          "CUST-001872",
+          "CUST-001898",
+          "CUST-002000",
+          "CUST-002610",
+          "CUST-002824",
+          "CUST-003047",
+          "CUST-003492",
+          "CUST-003840"
+        ],
+        "contracted_customer_ids": [
+          "CUST-000672",
+          "CUST-000852",
+          "CUST-000965",
+          "CUST-001091",
+          "CUST-001098",
+          "CUST-001112",
+          "CUST-001294",
+          "CUST-001460",
+          "CUST-001849",
+          "CUST-001877",
+          "CUST-001891",
+          "CUST-002128",
+          "CUST-002406",
+          "CUST-002415",
+          "CUST-002615",
+          "CUST-002738",
+          "CUST-002878",
+          "CUST-002947",
+          "CUST-002968",
+          "CUST-003060",
+          "CUST-003267",
+          "CUST-003553",
+          "CUST-003976",
+          "CUST-004197",
+          "CUST-004232",
+          "CUST-004388",
+          "CUST-004421",
+          "CUST-004579",
+          "CUST-004855",
+          "CUST-004891"
+        ],
+        "sg_enterprise_active_at_month_start": 101
+      }
+    },
+    {
+      "name": "Support-ticket spike after a faulty release",
+      "description": "Between 8 June and 24 July 2026 Bug, Integration and Performance tickets surged and resolution times lengthened; affected accounts became less engaged afterwards.",
+      "expected_signals": "Ticket volume per active customer in June-July well above March-May; higher Bug and Integration share; longer resolution times; more tickets among later churners.",
+      "event_id": "E2",
+      "injected": true,
+      "period_start": "2026-06-08",
+      "period_end": "2026-07-24",
+      "details": {
+        "extra_tickets": 1446,
+        "customer_months_hit": 1184,
+        "category_multipliers": {
+          "Bug": 2.6,
+          "Integration": 2.0,
+          "Performance": 1.4
+        },
+        "resolution_time_factor": 1.7
+      }
+    },
+    {
+      "name": "Inefficient Paid Social campaign",
+      "description": "A Q2 2026 Paid Social campaign spent heavily but converted poorly.",
+      "expected_signals": "Highest CAC of all campaigns; CAC far above the Paid Social median.",
+      "event_id": "E3",
+      "injected": true,
+      "period_start": "2026-04-06",
+      "period_end": "2026-07-05",
+      "details": {
+        "campaign_id": "CMP-045",
+        "campaign_name": "Paid Social | Brand Awareness Video | 2026-Q2",
+        "spend_multiplier": 1.6,
+        "lead_quality": 0.38,
+        "total_spend": 228090.78,
+        "total_conversions": 24
+      }
+    },
+    {
+      "name": "Sales representative with consistently low conversion",
+      "description": "One rep's deals progress through each funnel stage less often than peers'.",
+      "expected_signals": "Lowest observed win rate of all reps, clearly below the team median.",
+      "event_id": "E4",
+      "injected": true,
+      "details": {
+        "sales_rep": "Kenji Iyer",
+        "region": "North America",
+        "stage_conversion_factor": 0.85
+      }
+    },
+    {
+      "name": "AI Insights feature launch",
+      "description": "The AI Insights feature launched on 2 March 2026 and adoption ramped up.",
+      "expected_signals": "product_features rows for AI Insights start on the launch date; adoption rate rises steadily; broader feature usage among adopting accounts.",
+      "event_id": "E5",
+      "injected": true,
+      "period_start": "2026-03-02",
+      "period_end": "2026-08-31",
+      "details": {
+        "feature_id": "F12",
+        "feature_name": "AI Insights",
+        "launch_date": "2026-03-02",
+        "adopting_customers": 1377
+      }
+    },
+    {
+      "name": "Structurally higher SMB churn",
+      "description": "SMB customers churn at a consistently higher rate than larger segments.",
+      "expected_signals": "SMB has the highest logo churn rate in every period.",
+      "event_id": "E6",
+      "injected": true,
+      "period_start": "2024-09-01",
+      "period_end": "2026-08-31",
+      "details": {
+        "segment": "SMB",
+        "churn_intercepts": {
+          "SMB": -3.75,
+          "Mid-Market": -4.75,
+          "Enterprise": -5.35
+        }
+      }
+    },
+    {
+      "name": "Usage decline before churn",
+      "description": "From April 2026 a cohort of established accounts steadily disengaged; many churned in July-August 2026 and the rest remain at risk.",
+      "expected_signals": "Weekly active users fall well below earlier levels in the weeks before churn; rising support tickets for the same accounts.",
+      "event_id": "E7",
+      "injected": true,
+      "period_start": "2026-04-01",
+      "period_end": "2026-08-31",
+      "details": {
+        "cohort_customer_ids": [
+          "CUST-000005",
+          "CUST-000093",
+          "CUST-000119",
+          "CUST-000129",
+          "CUST-000169",
+          "CUST-000184",
+          "CUST-000197",
+          "CUST-000221",
+          "CUST-000258",
+          "CUST-000265",
+          "CUST-000375",
+          "CUST-000420",
+          "CUST-000429",
+          "CUST-000505",
+          "CUST-000565",
+          "CUST-000601",
+          "CUST-000698",
+          "CUST-000729",
+          "CUST-000735",
+          "CUST-000741",
+          "CUST-000781",
+          "CUST-000793",
+          "CUST-000829",
+          "CUST-000836",
+          "CUST-000907",
+          "CUST-000909",
+          "CUST-000920",
+          "CUST-001005",
+          "CUST-001099",
+          "CUST-001169",
+          "CUST-001296",
+          "CUST-001303",
+          "CUST-001338",
+          "CUST-001363",
+          "CUST-001365",
+          "CUST-001410",
+          "CUST-001442",
+          "CUST-001496",
+          "CUST-001539",
+          "CUST-001580",
+          "CUST-001616",
+          "CUST-001662",
+          "CUST-001680",
+          "CUST-001692",
+          "CUST-001700",
+          "CUST-001786",
+          "CUST-001831",
+          "CUST-001839",
+          "CUST-001939",
+          "CUST-001941",
+          "CUST-001953",
+          "CUST-002060",
+          "CUST-002063",
+          "CUST-002086",
+          "CUST-002114",
+          "CUST-002140",
+          "CUST-002181",
+          "CUST-002192",
+          "CUST-002230",
+          "CUST-002238",
+          "CUST-002271",
+          "CUST-002291",
+          "CUST-002351",
+          "CUST-002357",
+          "CUST-002382",
+          "CUST-002431",
+          "CUST-002435",
+          "CUST-002520",
+          "CUST-002576",
+          "CUST-002613",
+          "CUST-002672",
+          "CUST-002686",
+          "CUST-002748",
+          "CUST-002838",
+          "CUST-002935",
+          "CUST-002961",
+          "CUST-002979",
+          "CUST-002989",
+          "CUST-003022",
+          "CUST-003073",
+          "CUST-003116",
+          "CUST-003139",
+          "CUST-003196",
+          "CUST-003208",
+          "CUST-003240",
+          "CUST-003275",
+          "CUST-003307",
+          "CUST-003380",
+          "CUST-003413",
+          "CUST-003457",
+          "CUST-003464",
+          "CUST-003484",
+          "CUST-003491",
+          "CUST-003503",
+          "CUST-003510",
+          "CUST-003522",
+          "CUST-003534",
+          "CUST-003584",
+          "CUST-003633",
+          "CUST-003634"
+        ],
+        "churned_customer_ids": [
+          "CUST-000184",
+          "CUST-000197",
+          "CUST-000265",
+          "CUST-000420",
+          "CUST-000429",
+          "CUST-000698",
+          "CUST-000729",
+          "CUST-000781",
+          "CUST-000920",
+          "CUST-001099",
+          "CUST-001296",
+          "CUST-001303",
+          "CUST-001338",
+          "CUST-001539",
+          "CUST-001662",
+          "CUST-001680",
+          "CUST-001692",
+          "CUST-001831",
+          "CUST-001939",
+          "CUST-002060",
+          "CUST-002063",
+          "CUST-002181",
+          "CUST-002382",
+          "CUST-002431",
+          "CUST-002672",
+          "CUST-002979",
+          "CUST-003022",
+          "CUST-003116",
+          "CUST-003275",
+          "CUST-003380",
+          "CUST-003413",
+          "CUST-003484"
+        ],
+        "monthly_engagement_drift": 0.3
+      }
+    }
+  ]
+}
