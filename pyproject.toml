@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentops"
+version = "0.1.0"
+description = "AgentOps: AI Business Intelligence & Decision Agent (portfolio project)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Maya Sukumar" }]
+requires-python = ">=3.11"
+# Dependencies are added phase by phase; only what the implemented phases use is listed.
+dependencies = [
+    "duckdb>=1.5,<2",
+    "numpy>=2.0,<3",
+    "pandas>=2.2,<4",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3,<3",
+    "sqlglot>=25",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*", "data", "data.generator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "full_data: runs against the full generated database (skipped when it has not been built)",
+    "slow: tests that generate a medium-sized dataset",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Markdown tables in the rendered data dictionary cannot be wrapped.
+"app/database/data_dictionary.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
