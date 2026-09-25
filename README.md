@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 5 of 9 complete.**
+> **Status: Phase 6 of 9 complete.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
@@ -17,7 +17,7 @@ observed facts separate from inference and says when the evidence is insufficien
 | 3 | Forecasting and anomaly detection | ✅ |
 | 4 | LangGraph agent, tools, evidence layer | ✅ |
 | 5 | Guardrails, security and reliability | ✅ |
-| 6 | MCP server | ⏳ |
+| 6 | MCP integration | ✅ |
 | 7 | Evaluation framework (50+ benchmark questions) | ⏳ |
 | 8 | FastAPI and Streamlit | ⏳ |
 | 9 | Final QA and portfolio documentation | ⏳ |
@@ -169,6 +169,31 @@ later phases. The principle is **the model can propose; the application decides.
 
 Details: [`docs/security-architecture.md`](docs/security-architecture.md) · threats and residual risks: [`docs/security-threat-model.md`](docs/security-threat-model.md)
 
+## MCP server
+
+The twelve analytics tools are also available to any [MCP](https://modelcontextprotocol.io)
+client (IDE and desktop assistants, other agents) as `agentops_get_kpi`,
+`agentops_analyze_revenue`, …, `agentops_forecast_metric`, `agentops_detect_anomalies` and
+`agentops_run_safe_sql`.
+
+- **A thin adapter.** It uses the official MCP Python SDK over stdio. Each call goes through the
+  same Phase 5 execution path as the agent's tool calls: authorization, argument and
+  data-exposure policy, budget, deadlines, output validation and redaction. The adapter has no
+  analytics, SQL or permissions of its own.
+- **Structured, traceable results.** Responses keep the Phase 4 evidence and provenance: query
+  IDs, source tables, calculation, period and filters. They label forecasts, anomaly scores and
+  risk scores as such, and fail safely with categorised, sanitised errors.
+- **No machine access.** There are no file, shell, Python or environment tools, and the
+  ground-truth seed data is unreachable.
+
+```bash
+python -m app.mcp --list-tools    # the enabled tools
+python -m app.mcp                 # stdio server (normally launched by the MCP client)
+claude mcp add agentops -- "$PWD/.venv/bin/agentops-mcp"   # e.g. register it with Claude Code
+```
+
+Details, client configuration and examples: [`docs/mcp-architecture.md`](docs/mcp-architecture.md)
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -203,7 +228,9 @@ app/
   llm/                   provider-neutral LLM interface, prompts, output schemas, deterministic + Anthropic providers
   agent/                 LangGraph state machine, request validation, claim builders, responses, runner
   security/              limits, input guard, prompt-injection screen, tool authorization, plan validator,
-                         data-exposure policy, output guard, budgets, retries, timeouts, redaction, audit events
+                         data-exposure policy, output guard, budgets, retries, timeouts, redaction, audit events,
+                         the secured tool executor shared by the agent and MCP
+  mcp/                   MCP server: tool registry, adapters, schemas, error model, audit, stdio entry point
 data/
   generator/             reproducible synthetic-data pipeline (CLI: python -m data.generator.generate)
   metadata/              dataset manifest, checksums, machine-readable data dictionary
@@ -211,8 +238,8 @@ data/
 database/                DuckDB file (generated, git-ignored)
 docs/                    implementation plan, data dictionary, analytics guide, KPI catalog,
                          forecasting and anomaly-detection guides, agent architecture,
-                         security architecture and threat model
-tests/                   unit, integration and security (adversarial, SQL attack, regression) tests
+                         security architecture and threat model, MCP architecture
+tests/                   unit, integration, security (adversarial, SQL attack, regression) and MCP tests
 ```
 
 ## License
