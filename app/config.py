@@ -35,13 +35,28 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
     anthropic_api_key: SecretStr | None = None
 
-    # ---- Phase 4: agent limits (hard bounds on every run) ----
+    # ---- Phase 4/5: agent limits (hard bounds on every run; see app/security/limits.py) ----
     agent_max_tool_calls: int = Field(default=12, ge=1, le=50)
     agent_max_retries: int = Field(default=2, ge=0, le=5)
     agent_max_planning_iterations: int = Field(default=2, ge=1, le=5)
     agent_sql_row_limit: int = Field(default=200, ge=1, le=5000)
     agent_max_run_seconds: float = Field(default=120.0, gt=0)
     agent_max_response_chars: int = Field(default=4000, ge=200, le=20000)
+    agent_max_question_chars: int = Field(default=1000, ge=20, le=10000)
+    agent_max_filters: int = Field(default=5, ge=0, le=20)
+    agent_max_dimensions: int = Field(default=3, ge=0, le=10)
+    agent_max_plan_steps: int = Field(default=8, ge=1, le=50)
+    agent_max_sql_calls: int = Field(default=3, ge=0, le=20)
+    agent_max_sql_rows_total: int = Field(default=1000, ge=1, le=100000)
+    agent_max_sql_length: int = Field(default=4000, ge=100, le=100000)
+    agent_max_sql_joins: int = Field(default=4, ge=0, le=20)
+    agent_max_sql_nesting_depth: int = Field(default=3, ge=0, le=10)
+    agent_max_customer_rows: int = Field(default=25, ge=1, le=200)
+    agent_max_context_items: int = Field(default=40, ge=5, le=500)
+    agent_max_context_chars: int = Field(default=60000, ge=2000, le=1000000)
+    agent_tool_timeout_seconds: float = Field(default=30.0, gt=0)
+    agent_sql_timeout_seconds: float = Field(default=10.0, gt=0)
+    agent_disabled_tools: str = ""  # comma-separated tool names switched off for the agent
 
     @field_validator("llm_model", mode="before")
     @classmethod
