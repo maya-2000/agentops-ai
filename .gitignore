@@ -222,3 +222,7 @@ __marimo__/
 database/*.duckdb
 database/*.duckdb.wal
 data/seeds/parquet/
+
+# Phase 7 evaluation outputs (generated)
+reports/evaluation/
+.eval_cache/
