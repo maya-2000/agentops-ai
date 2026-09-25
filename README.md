@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 6 of 9 complete.**
+> **Status: Phase 7 of 9 complete.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
@@ -18,7 +18,7 @@ observed facts separate from inference and says when the evidence is insufficien
 | 4 | LangGraph agent, tools, evidence layer | ✅ |
 | 5 | Guardrails, security and reliability | ✅ |
 | 6 | MCP integration | ✅ |
-| 7 | Evaluation framework (50+ benchmark questions) | ⏳ |
+| 7 | Evaluation & benchmark suite (89 scenarios, deterministic grading, security, MCP parity) | ✅ |
 | 8 | FastAPI and Streamlit | ⏳ |
 | 9 | Final QA and portfolio documentation | ⏳ |
 
@@ -194,6 +194,52 @@ claude mcp add agentops -- "$PWD/.venv/bin/agentops-mcp"   # e.g. register it wi
 
 Details, client configuration and examples: [`docs/mcp-architecture.md`](docs/mcp-architecture.md)
 
+## Evaluation and benchmark
+
+`evals/` measures how reliably the system behaves. It is a harness outside the application:
+production never imports it. It runs the real paths (the LangGraph agent, the shared secured
+executor and the MCP server over the protocol) and grades their structured behaviour, never
+their wording.
+
+- **89 versioned scenarios** (`eval_v1`) cover KPIs, investigations, forecasts, anomalies,
+  refusals, 10 prompt injections, compromised-model plans, an SQL attack benchmark, data
+  exposure, MCP and evidence integrity. Difficulty levels are easy, medium, hard and adversarial.
+- **Independent references.** Expected values come from the Phase 2/3 pandas and time-series
+  references at run time, within documented tolerances. The scenarios hold no numbers and no
+  answers.
+- **Hidden ground truth stays hidden.** Only `evals/reference/` reads the injected-event labels.
+  They are rewarded as observable findings (the country, segment, month...), never by name.
+  Static and runtime tests prove that nothing reaches the agent, model, tools or MCP.
+- **One execution path.** A probe on `app/security/execution.py` shows that the agent and MCP get
+  the same authorization, deadlines, retries, output validation, budgets and security events.
+  Twenty parity scenarios check that MCP returns exactly what the direct path returns.
+
+Results of the deterministic run (local, synthetic data; not a production claim):
+
+| | |
+|---|---|
+| Scenarios passed | 82 / 89; all regression thresholds pass; critical suite 13 / 13 |
+| Security, injection, SQL, exposure | 32 / 32; 0 security or data-exposure failures |
+| MCP parity | 100% (20 scenarios, 47 calls) |
+| Evidence grounding / hallucinations / unsupported causal claims | 100% / 0% / 0% |
+| Numerical accuracy | 92.3% (36 of 39 reference checks) |
+| Intent / parameter / tool selection | 97.3% / 97.1% / 96.6% |
+| Refusal recall / false refusals | 100% / 2.5% |
+| Multi-seed (seeds 7 and 2027) | 22 / 22 |
+
+The seven failures are real agent gaps the benchmark found, reported rather than hidden: a wrong
+comparison month, a level ranking where a change was asked for, a missing channel breakdown, a
+false refusal, a validator that reads customer-ID digits as numbers, and a validator gap on
+claim metrics.
+
+```bash
+python -m evals.run                    # full benchmark, deterministic (no key, no network)
+python -m evals.run --suite critical   # 13-scenario regression suite
+python -m evals.run --category prompt_injection --multi-seed 7,2027
+```
+
+Metrics, thresholds, reports and limitations: [`docs/evaluation.md`](docs/evaluation.md)
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -205,7 +251,8 @@ pip install -e ".[dev]"
 cp .env.example .env              # optional; defaults work without it
 
 python -m data.generator.generate # build database/northwind_cloud.duckdb (~30 s)
-pytest                            # full test suite (~2 min; builds its own datasets)
+pytest                            # full test suite (~4 min; builds its own datasets)
+python -m evals.run --suite critical  # evaluation regression suite (~12 s)
 ```
 
 The test suite needs no API key, LLM, network access or pre-built database: the agent tests use
@@ -231,6 +278,8 @@ app/
                          data-exposure policy, output guard, budgets, retries, timeouts, redaction, audit events,
                          the secured tool executor shared by the agent and MCP
   mcp/                   MCP server: tool registry, adapters, schemas, error model, audit, stdio entry point
+evals/                   evaluation harness (not part of the app): scenario datasets, independent references,
+                         hidden-label mapping, runners, deterministic graders, metrics, thresholds, reports
 data/
   generator/             reproducible synthetic-data pipeline (CLI: python -m data.generator.generate)
   metadata/              dataset manifest, checksums, machine-readable data dictionary
@@ -238,8 +287,8 @@ data/
 database/                DuckDB file (generated, git-ignored)
 docs/                    implementation plan, data dictionary, analytics guide, KPI catalog,
                          forecasting and anomaly-detection guides, agent architecture,
-                         security architecture and threat model, MCP architecture
-tests/                   unit, integration, security (adversarial, SQL attack, regression) and MCP tests
+                         security architecture and threat model, MCP architecture, evaluation
+tests/                   unit, integration, security (adversarial, SQL attack, regression), MCP and evaluation tests
 ```
 
 ## License
