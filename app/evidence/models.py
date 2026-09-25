@@ -14,8 +14,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +30,8 @@ ClaimType = Literal["observed_fact", "calculated_result", "inference", "recommen
 SupportStatus = Literal["supported", "partially_supported", "unsupported"]
 Confidence = Literal["high", "medium", "low"]
 Direction = Literal["increase", "decrease", "none"]
+CausalBasis = Literal["none", "accounting_identity", "controlled_experiment"]
+EVIDENCE_ID = re.compile(r"^E[1-9][0-9]{0,5}$")
 
 
 class Evidence(BaseModel):
@@ -57,8 +62,16 @@ class Evidence(BaseModel):
     source_tables: list[str] = Field(default_factory=list)
     calculation: str | None = None
     execution_timestamp: datetime
+    input_arguments: dict[str, Any] = Field(default_factory=dict)  # the tool call's validated arguments
     limitations: list[str] = Field(default_factory=list)
     confidence: Confidence = "high"
+    fingerprint: str = ""  # SHA-256 of the content above, set when the evidence enters a graph
+
+    def compute_fingerprint(self) -> str:
+        """Deterministic hash of every field except the fingerprint itself (tamper evidence)."""
+        content = self.model_dump(mode="json", exclude={"fingerprint"})
+        canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @property
     def query_id(self) -> str | None:
@@ -97,6 +110,9 @@ class Claim(BaseModel):
     direction_evidence: NumericAssertion | None = None  # the signed number that the direction must agree with
     about_period_start: date | None = None
     about_period_end: date | None = None
+    # Causal wording is allowed only when every cited claim has a causal basis. No builder sets one
+    # today: the dataset supports associations and accounting identities, not experiments.
+    causal_basis: CausalBasis = "none"
 
 
 class EvidenceGraph(BaseModel):
@@ -113,10 +129,25 @@ class EvidenceGraph(BaseModel):
         return f"C{len(self.claims) + 1}"
 
     def add_evidence(self, evidence: Evidence) -> str:
+        """Add and seal an evidence item: its fingerprint is set (or verified) here."""
+        if not EVIDENCE_ID.match(evidence.evidence_id):
+            raise ValueError(f"Invalid evidence id {evidence.evidence_id[:20]!r}; the evidence layer assigns E<n> ids")
         if evidence.evidence_id in self.evidence:
             raise ValueError(f"Duplicate evidence id {evidence.evidence_id}")
+        expected = evidence.compute_fingerprint()
+        if evidence.fingerprint and evidence.fingerprint != expected:
+            raise ValueError(f"Evidence {evidence.evidence_id} does not match its fingerprint")
+        evidence.fingerprint = expected
         self.evidence[evidence.evidence_id] = evidence
         return evidence.evidence_id
+
+    def verify_integrity(self) -> list[str]:
+        """Evidence IDs whose content no longer matches the fingerprint taken when they were added."""
+        return [
+            evidence_id
+            for evidence_id, e in self.evidence.items()
+            if e.evidence_id != evidence_id or not e.fingerprint or e.fingerprint != e.compute_fingerprint()
+        ]
 
     def add_claim(self, claim: Claim) -> str:
         if claim.claim_id in self.claims:

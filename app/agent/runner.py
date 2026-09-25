@@ -22,6 +22,11 @@ from app.evidence.models import Claim, Evidence
 from app.llm.base import LLMClient
 from app.llm.factory import create_llm_client
 from app.llm.schemas import UnderstandingOutput
+from app.security.budget import BudgetUsage
+from app.security.events import SecurityEvent, Severity, security_event
+from app.security.injection import InjectionScan
+from app.security.redaction import redact
+from app.security.retry import RetryRecord
 from app.tools.registry import ToolRegistry
 
 
@@ -44,6 +49,10 @@ class AgentRunResult(BaseModel):
     execution_time_ms: float
     llm_provider: str
     llm_model: str
+    security_events: list[SecurityEvent] = Field(default_factory=list)
+    budget_usage: BudgetUsage = Field(default_factory=BudgetUsage)
+    retries: list[RetryRecord] = Field(default_factory=list)
+    input_screen: InjectionScan | None = None
 
 
 class AgentRunner:
@@ -69,25 +78,45 @@ class AgentRunner:
         )
         self.graph = build_graph(self.runtime)
 
-    def run(self, question: str) -> AgentRunResult:
+    def run(self, question: Any) -> AgentRunResult:
+        """Answer one question. The question is untrusted: it is redacted before it enters the state."""
         run_id = f"R-{uuid.uuid4().hex[:12]}"
         clock = time.perf_counter()
-        initial = AgentState(run_id=run_id, question=question, started_at=datetime.now(UTC))
+        is_text = isinstance(question, str)
+        text = question if isinstance(question, str) else ""
+        clean = redact(text)
+        initial = AgentState(
+            run_id=run_id,
+            question=clean,
+            question_is_text=is_text,
+            question_redacted=clean != text,
+            started_at=datetime.now(UTC),
+        )
         try:
             raw: Any = self.graph.invoke(initial, config={"recursion_limit": self.config.recursion_limit})
             state = raw if isinstance(raw, AgentState) else AgentState.model_validate(raw)
         except GraphRecursionError:
+            stop = security_event(
+                run_id,
+                "budget_exceeded",
+                Severity.HIGH,
+                component="graph",
+                action="recursion_limit",
+                decision="stop",
+                reason="The graph step limit was reached.",
+            )
             state = initial.model_copy(
                 update={
                     "status": "insufficient_evidence",
                     "response": failure_response("insufficient_evidence", LIMIT_MESSAGE),
                     "errors": [AgentError(stage="graph", code="recursion_limit", message=LIMIT_MESSAGE)],
+                    "security_events": [stop],
                 }
             )
         assert state.response is not None, "every terminal node sets a response"
         return AgentRunResult(
             run_id=run_id,
-            question=question,
+            question=state.question,  # the redacted question; the raw input is never stored
             status=state.status,
             response=state.response,
             understanding=state.understanding,
@@ -104,6 +133,10 @@ class AgentRunner:
             execution_time_ms=round((time.perf_counter() - clock) * 1000, 1),
             llm_provider=self.llm.provider,
             llm_model=self.llm.model,
+            security_events=state.security_events,
+            budget_usage=state.budget_usage,
+            retries=state.retries,
+            input_screen=state.input_screen,
         )
 
 

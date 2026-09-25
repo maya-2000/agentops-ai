@@ -11,6 +11,8 @@ import json
 import logging
 from typing import Any
 
+from app.security.redaction import redact_value
+
 LOGGER_NAME = "agentops.agent"
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -37,6 +39,9 @@ _ALLOWED_KEYS = {
     "iteration",
     "steps",
     "execution_time_seconds",
+    "event_type",
+    "severity",
+    "decision",
 }
 
 
@@ -45,5 +50,5 @@ def log_event(run_id: str, event: str, **fields: Any) -> None:
     if not logger.isEnabledFor(logging.INFO):
         return
     payload = {"run_id": run_id, "event": event}
-    payload.update({k: v for k, v in fields.items() if k in _ALLOWED_KEYS})
+    payload.update({k: redact_value(v) for k, v in fields.items() if k in _ALLOWED_KEYS})
     logger.info(json.dumps(payload, default=str, sort_keys=True))

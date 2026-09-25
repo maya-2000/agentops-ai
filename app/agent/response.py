@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 from app.agent.records import AgentStatus, ToolCallRecord
 from app.evidence.models import EvidenceGraph
 from app.llm.schemas import DraftItemOutput, ResponseDraftOutput
+from app.security.errors import safe_message
+from app.security.redaction import redact
 
 
 def scope_text(coverage: tuple[date, date] | None) -> str:
@@ -28,6 +30,7 @@ def scope_text(coverage: tuple[date, date] | None) -> str:
 
 LIMIT_MESSAGE = "Investigation limit reached before sufficient evidence could be collected."
 LIMIT_CAVEAT = "The tool-call limit was reached, so no further drill-down was performed."
+TRIMMED_CAVEAT = "Some lower-priority findings were omitted to keep the response within its length limit."
 MAX_CAVEATS = 6
 
 
@@ -85,10 +88,11 @@ def trace_entries(calls: Sequence[ToolCallRecord]) -> list[ToolTraceEntry]:
             tool_name=c.tool_name,
             success=c.success,
             status=c.status,
-            result_summary=c.result_summary,
+            # Users see a failure's code only; the (sanitised) detail stays in the developer trace.
+            result_summary=c.result_summary if c.success else f"failed ({c.error.code if c.error else 'error'})",
             query_id=c.query_id,
             evidence_ids=c.evidence_ids,
-            error=c.error.message if c.error else None,
+            error=safe_message(c.error.code) if c.error else None,  # a category, never exception text
         )
         for c in calls
     ]
@@ -121,6 +125,7 @@ def build_caveats(
     warnings: Sequence[str] = (),
     limit_reached: bool = False,
     causal_question: bool = False,
+    response_trimmed: bool = False,
 ) -> list[str]:
     """Deterministic caveats from the cited evidence and the run itself (never dropped by the model)."""
     caveats: list[str] = []
@@ -128,6 +133,8 @@ def build_caveats(
         caveats.append("The analysis shows associations and contributions; it does not establish causes.")
     if limit_reached:
         caveats.append(LIMIT_CAVEAT)
+    if response_trimmed:
+        caveats.append(TRIMMED_CAVEAT)
     caveats.extend(w for w in warnings if w.startswith("Tool call failed"))
     for claim_id in cited_claim_ids:
         claim = graph.claims.get(claim_id)
@@ -222,3 +229,22 @@ def failure_response(
         tool_trace=trace_entries(calls),
         generated_by="template",
     )
+
+
+def redact_response(response: AgentResponse) -> tuple[AgentResponse, bool]:
+    """Remove secret-like values from every user-facing text field (the last output boundary)."""
+    items = {
+        "key_findings": [i.model_copy(update={"text": redact(i.text)}) for i in response.key_findings],
+        "interpretation": [i.model_copy(update={"text": redact(i.text)}) for i in response.interpretation],
+        "recommendations": [i.model_copy(update={"text": redact(i.text)}) for i in response.recommendations],
+    }
+    cleaned = response.model_copy(
+        update={
+            "answer": redact(response.answer),
+            "caveats": [redact(c) for c in response.caveats],
+            "assumptions": [redact(a) for a in response.assumptions],
+            "evidence": [e.model_copy(update={"statement": redact(e.statement)}) for e in response.evidence],
+            **items,
+        }
+    )
+    return cleaned, cleaned != response
