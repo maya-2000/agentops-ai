@@ -31,8 +31,32 @@ from app.evidence.models import Claim, Evidence, EvidenceGraph
 from app.llm.schemas import DraftItemOutput, ResponseDraftOutput
 
 _CAUSAL = re.compile(
-    r"\b(caused|causes|causing|cause of|because of|due to|led to|leads to|lead to|resulted in|results in|"
-    r"result of|drove|drives|driven by|triggered|attributable to)\b",
+    r"\b(caused|causes|causing|cause of|the cause|because|due to|led to|leads to|lead to|leading to|resulted in|"
+    r"results in|resulted from|results from|result of|as a result|drove|drives|driven by|triggered|attributable to|"
+    r"responsible for|the reason (?:for|why)|explains why|directly caused)\b",
+    re.IGNORECASE,
+)
+# Wording guardrails for the response (Phase 5).
+_INCREASE_WORDS = re.compile(r"\b(increas\w*|rose|risen|grew|grows|growing|climb\w*|jump\w*|surg\w*|up by)\b", re.I)
+_DECREASE_WORDS = re.compile(r"\b(decreas\w*|declin\w*|fell|fall(?:s|ing|en)?|drop\w*|down by|shr[ai]nk\w*)\b", re.I)
+_FORECAST_CERTAINTY = re.compile(
+    r"\b(will (?:be|reach|hit|grow|fall|decline|increase|decrease|drop|rise|exceed|stay|remain|total)|"
+    r"is going to|are going to|guarantee\w*|certainly|definitely|for sure|is certain)\b",
+    re.IGNORECASE,
+)
+_JUDGEMENT_WORDS = re.compile(
+    r"\b(bad|good|poor|terrible|awful|great|excellent|healthy|unhealthy|problem\w*|failure|failing|crisis|"
+    r"alarming|worrying|concerning|disaster\w*|catastroph\w*|worse|better)\b",
+    re.IGNORECASE,
+)
+_SUGGESTION_VERBS = re.compile(
+    r"\b(review|investigate|check|consider|examine|compare|monitor|assess|validate|explore|analy[sz]e|"
+    r"look into|confirm|verify)\b",
+    re.IGNORECASE,
+)
+_DIRECTIVE_WORDS = re.compile(
+    r"\b(immediately|must|urgent\w*|fix|guarantee\w*|will (?:fix|solve|resolve|restore|improve|stop|prevent)|"
+    r"definitely|certainly|terminate|fire)\b",
     re.IGNORECASE,
 )
 _NEGATION = re.compile(
@@ -48,6 +72,12 @@ _TOLERANCE = 1e-6
 def causal_sentences(text: str) -> list[str]:
     """Sentences that assert causality (causal wording that is not negated)."""
     return [s for s in _SENTENCE.split(text) if _CAUSAL.search(s) and not _NEGATION.search(s)]
+
+
+def _causal_supported(claims: Iterable[Claim]) -> bool:
+    """Causal wording needs a causal basis on every cited claim (never inferred from wording)."""
+    cited = list(claims)
+    return bool(cited) and all(c.causal_basis != "none" for c in cited)
 
 
 class EvidenceValidationResult(BaseModel):
@@ -71,8 +101,12 @@ def validate_evidence(
     unsupported: list[str] = []
     missing: list[str] = []
 
+    for evidence_id in graph.verify_integrity():
+        errors.append(f"{evidence_id}: evidence content does not match its fingerprint (modified after creation)")
+    tampered = set(graph.verify_integrity())
     for claim in graph.claims.values():
         problems = _claim_problems(claim, graph, executed)
+        problems += [f"rests on modified evidence {e}" for e in claim.evidence_ids if e in tampered]
         if not claim.evidence_ids and (claim.claim_type != "recommendation" or _has_numbers(claim.text)):
             missing.append(claim.claim_id)
             problems.append("has no evidence")
@@ -121,8 +155,10 @@ def _claim_problems(claim: Claim, graph: EvidenceGraph, executed: set[str]) -> l
             problems.append(f"{e.evidence_id} is a truncated SQL result but the claim does not say so")
     if claim.claim_type == "observed_fact" and any(e.evidence_type != "observed" for e in evidence):
         problems.append("is marked observed but rests on non-observed evidence (should be calculated or inference)")
-    if causal_sentences(claim.text):
+    if causal_sentences(claim.text) and claim.causal_basis == "none":
         problems.append("uses causal language the evidence does not establish")
+    for e in evidence:
+        problems += _typed_provenance_problems(e)
     if claim.about_period_start and claim.about_period_end and evidence:
         dated = [e for e in evidence if e.period_start and e.period_end]
         if dated and not any(
@@ -155,6 +191,23 @@ def _claim_problems(claim: Claim, graph: EvidenceGraph, executed: set[str]) -> l
         if expected != claim.direction:
             problems.append(f"direction {claim.direction} contradicts the evidence ({expected})")
     return problems
+
+
+def _typed_provenance_problems(e: Evidence) -> list[str]:
+    """Forecast and anomaly evidence must keep what makes it interpretable."""
+    if e.evidence_type == "forecast":
+        missing = [k for k in ("model", "cutoff_date", "horizon") if e.details.get(k) in (None, "")]
+        if missing:
+            return [f"{e.evidence_id} is a forecast without {', '.join(missing)}"]
+        cutoff = str(e.details["cutoff_date"])
+        if e.period_start is None or e.period_start.isoformat() <= cutoff:
+            return [f"{e.evidence_id} is a forecast that does not lie after its cutoff"]
+    if e.evidence_type == "anomaly":
+        missing = [k for k in ("detector", "threshold", "direction") if e.details.get(k) in (None, "")]
+        missing += [k for k in ("expected_value", "score") if k not in e.attributes]
+        if missing or e.period_start is None:
+            return [f"{e.evidence_id} is an anomaly result without {', '.join(missing) or 'a period'}"]
+    return []
 
 
 # ------------------------------------------------------------------------------------------------ response
@@ -235,14 +288,30 @@ def _item_problems(
         if not number_is_supported(number, allowed):
             unsupported_numbers.append(number.raw)
             problems.append(f"{section}: number {number.raw!r} does not appear in the cited evidence")
-    for sentence in causal_sentences(text):
-        problems.append(f"{section}: unsupported causal statement: {sentence[:100]!r}")
+    if not _causal_supported(claims):
+        for sentence in causal_sentences(text):
+            problems.append(f"{section}: unsupported causal statement: {sentence[:100]!r}")
     kinds = {c.kind for c in claims}
     types = {c.claim_type for c in claims}
     if kinds & {"forecast"} and not _FORECAST_WORDS.search(text):
         problems.append(f"{section}: forecast presented without being labelled as a forecast")
+    if kinds & {"forecast"} and _FORECAST_CERTAINTY.search(text):
+        problems.append(f"{section}: forecast presented with certainty (a forecast is an estimate, not a fact)")
     if kinds & {"anomaly", "anomaly_summary"} and not _ANOMALY_WORDS.search(text):
         problems.append(f"{section}: anomaly result presented without being labelled as statistically unusual")
+    if kinds & {"anomaly", "anomaly_summary"} and _JUDGEMENT_WORDS.search(text):
+        problems.append(f"{section}: anomaly presented as a business judgement (unusual is not good or bad)")
+    directions = {c.direction for c in claims if c.kind == "change" and c.direction in ("increase", "decrease")}
+    says_up, says_down = bool(_INCREASE_WORDS.search(text)), bool(_DECREASE_WORDS.search(text))
+    if directions == {"decrease"} and says_up and not says_down:
+        problems.append(f"{section}: states an increase but the cited evidence shows a decrease")
+    if directions == {"increase"} and says_down and not says_up:
+        problems.append(f"{section}: states a decrease but the cited evidence shows an increase")
+    if section == "recommendations":
+        if not _SUGGESTION_VERBS.search(text):
+            problems.append("recommendations: a recommendation must be framed as a suggested next step")
+        if _DIRECTIVE_WORDS.search(text):
+            problems.append("recommendations: a recommendation must not be a directive or promise an outcome")
     if section == "key_findings" and types and types <= {"inference", "recommendation"}:
         problems.append("key_findings: an inference or recommendation is presented as a finding")
     if section == "recommendations" and claims and "recommendation" not in types:

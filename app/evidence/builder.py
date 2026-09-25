@@ -114,6 +114,7 @@ class _Collector:
             source_tables=list(self.result.source_tables),
             calculation=self.result.calculation,
             execution_timestamp=self.result.finished_at,
+            input_arguments=dict(self.result.arguments),
             limitations=list(limitations if limitations is not None else self.result.limitations),
             confidence="high" if status == "ok" else "low",
         )
