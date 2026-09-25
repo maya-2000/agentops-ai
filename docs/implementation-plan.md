@@ -517,3 +517,28 @@ subtler event:
   binomial p < 0.001, replacing a fixed 8% floor.
 - The concentration check now uses the country x segment breakdown instead of a
   company-wide segment ranking, where growth elsewhere can mask the event.
+
+### Phase 2 (KPI framework and analytics engine) — complete
+
+Architecture and principles from Phase 0 are unchanged. The analytics layer (`app/analytics/`)
+is the single source of truth for business numbers and knows nothing about agents, LLMs, MCP,
+APIs or UIs. Details: [analytics.md](analytics.md) and the generated [kpi-catalog.md](kpi-catalog.md).
+
+| Topic | Plan | Implemented | Reason |
+|---|---|---|---|
+| KPI count | "KPIs (19)" | **20** KPIs | The plan enumerated 20 concepts (churn = logo + revenue); none were dropped. Discrepancy documented in analytics.md |
+| Registry format | `registry.yaml` or Python module | Strongly typed Python registry loaded into Pydantic `KPIDefinition`s | Matches Phase 1's `metadata.py` single-source-of-truth style; type-checked |
+| SQL organisation | One SQL per KPI | 10 shared templates plus declarative value rules | Related KPIs (MRR/ARR/ARPU/customer count; churn/retention/NRR; win rate/AOV/cycle) cannot drift apart; totals and breakdowns use the same rule |
+| Database protocol | `params: list` | `params: Sequence \| Mapping` (type hint only; runtime unchanged) | Named `$parameters` keep multi-CTE templates reviewable and safe; the only Phase 1 change |
+| Point-in-time rule | `v_monthly_mrr` month-end rule | "In force at the close of day X" excluding a churned record ending on X | Needed for exact bridge reconciliation on arbitrary dates; equal to `v_monthly_mrr` at month ends (tested) |
+| Conversion rate | Lead to customer | Marketing lead to customer (`conversion_rate` KPI); opportunity conversion in sales analytics | Matches the Phase 0 definition; the sales funnel is covered by win rate and `opportunity_conversion` |
+| ROAS | Via acquisition channel/campaign | Channel-level, first-90-day revenue | Customers carry no campaign id, so campaign-level attribution would be fabricated |
+| CLV | Not specified | Revenue-based (ARPA / monthly churn) | No gross-margin assumption exists in the repository |
+| Risk scoring | Rule score plus optional logistic regression | Transparent rule score, backtested at 4 dates | Logistic regression deferred: it needs a fuller validation framework; the rule score is transparent and monotonic in backtests |
+| Product adoption by segment/region | Implied | Adoption *breadth* from `usage_events.feature_usage` | `product_features` is platform-level and has no customer attributes |
+| KPI views (`v_churn_monthly`, ...) | Deferred from Phase 1 | Not created as views; KPIs live in the registry | Formulas belong in one place (the registry), not in database views |
+
+Validation: 287 Phase 2 tests. All 20 KPIs match an independent pandas reference across
+four periods and several filters; reconciliation, identity, invariant, edge-case, isolation and
+performance tests; and a time-based backtest of the risk bands. Injected-event ground truth is
+not used by any analytics code or test.
