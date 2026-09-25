@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -33,7 +34,7 @@ class DuckDBDatabase:
     def query(
         self,
         sql: str,
-        params: list[Any] | None = None,
+        params: Sequence[Any] | Mapping[str, Any] | None = None,
         *,
         tool_run_id: str | None = None,
         calculation: str | None = None,
