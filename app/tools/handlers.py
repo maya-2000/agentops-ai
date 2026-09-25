@@ -20,6 +20,7 @@ from app.analytics.executor import QueryRunner
 from app.analytics.kpis import KPIResult, get_kpi_definition
 from app.analytics.models import AnalyticsResult, Scalar
 from app.anomalies import AnomalyReport, AnomalyService
+from app.database.deadline import execution_deadline
 from app.forecasting import ForecastResult, ForecastService
 from app.tools.base import ToolContext, ToolOutput, ToolStatus
 from app.tools.inputs import (
@@ -321,11 +322,12 @@ def detect_anomalies(ctx: ToolContext, inp: AnomalyInput) -> ToolOutput:
 
 def run_safe_sql(ctx: ToolContext, inp: SafeSQLInput) -> ToolOutput:
     max_rows = min(inp.max_rows or ctx.sql_row_limit, ctx.sql_row_limit)
-    validated = validate_sql(inp.sql, inp.parameters, max_rows)
-    description = inp.description.strip() or "Ad-hoc read-only query"
+    validated = validate_sql(inp.sql, inp.parameters, max_rows, limits=ctx.sql_limits)
+    description = inp.description.strip()[:200] or "Ad-hoc read-only query"
     runner = QueryRunner(ctx.db, "run_safe_sql")
     try:
-        result = runner.run(validated.sql, dict(validated.parameters), calculation=description)
+        with execution_deadline(ctx.sql_timeout_seconds):
+            result = runner.run(validated.sql, dict(validated.parameters), calculation=description)
     except InvalidRequestError as exc:
         raise UnsafeSQLError(str(exc)) from None
     rows = [[_scalar(v) for v in row] for row in result.rows]
