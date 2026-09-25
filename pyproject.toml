@@ -17,7 +17,11 @@ dependencies = [
     "pandas>=2.2,<4",
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.3,<3",
+    # Phase 3: ETS(A,Ad,N) with analytic prediction intervals (statsmodels) and t tail probabilities (scipy).
+    # statsmodels 0.15 is the release tested with pandas 3.
+    "scipy>=1.13,<2",
     "sqlglot>=25",
+    "statsmodels>=0.15,<0.16",
 ]
 
 [project.optional-dependencies]

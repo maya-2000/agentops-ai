@@ -54,6 +54,7 @@ def test_no_driver_or_later_phase_dependencies(path: Path) -> None:
         assert module.split(".")[0] not in forbidden, f"{path.name} imports {module}"
 
 
-def test_phase3_modules_not_created() -> None:
-    for name in ("forecasting", "anomaly", "agent", "llm", "api", "ui"):
+def test_later_phase_modules_not_created() -> None:
+    # Phase 3 added app/timeseries, app/forecasting and app/anomalies (see test_phase3_isolation.py).
+    for name in ("agent", "llm", "api", "ui", "evidence", "guardrails", "tools", "evaluation"):
         assert not (PROJECT_ROOT / "app" / name).exists(), f"app/{name} belongs to a later phase"
