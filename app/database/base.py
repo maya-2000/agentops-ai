@@ -6,6 +6,7 @@ specific driver, so DuckDB (default) can later be swapped for PostgreSQL via DAT
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
@@ -30,14 +31,18 @@ class QueryResult(BaseModel):
 
 @runtime_checkable
 class Database(Protocol):
-    """Read-only access to the business database."""
+    """Read-only access to the business database.
+
+    ``params`` are bound, never interpolated: positional (``?``) as a sequence, or named
+    (``$name``) as a mapping.
+    """
 
     dataset_version: str
 
     def query(
         self,
         sql: str,
-        params: list[Any] | None = None,
+        params: Sequence[Any] | Mapping[str, Any] | None = None,
         *,
         tool_run_id: str | None = None,
         calculation: str | None = None,
