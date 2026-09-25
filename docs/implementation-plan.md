@@ -576,3 +576,61 @@ changes. Validation: 373 Phase 3 tests, including an independent reference imple
 (`tests/reference_timeseries.py`), leakage tests, missing-data and insufficient-history tests,
 integration tests on the generated dataset and latency budgets. No Phase 3 production code reads
 the injected-event ground truth or the hidden customer-health mechanism.
+
+### Phase 4 (LangGraph agent, tools and evidence layer) — complete
+
+Phase 4 adds four packages on top of Phases 1–3. The principle from Phase 0 is enforced
+structurally: the LLM understands, plans and words, and deterministic tools produce every number.
+
+- `app/tools/`: 12 typed tools over Phase 2/3, the allow-listed `ToolRegistry`, and SQL safety
+  (`sql_safety.py`).
+- `app/evidence/`: `Evidence`, `Claim`, the claim–evidence graph, `validate_evidence`,
+  `validate_response`, and number formatting and extraction.
+- `app/llm/`: the `LLMClient` protocol, prompts, strict output schemas, `DeterministicLLM`
+  (default, offline), `AnthropicLLM` (optional extra) and `ScriptedLLM` (tests).
+- `app/agent/`: `AgentState`, the LangGraph graph, request validation, claim builders, response
+  assembly, `AgentRunner`/`run_agent` and structured logging.
+
+Details: [agent-architecture.md](agent-architecture.md).
+
+| Topic | Plan (§8, §9, §10) | Implemented | Reason |
+|---|---|---|---|
+| Graph nodes | `input_guard`, `question_understood`, `plan_created`, `tools_selected`, ... | `question_received`, `understand_question`, `validate_request`, `plan_investigation`, `execute_tools`, `collect_evidence`, `validate_evidence`, `generate_response`, `validate_response`, `done` + 5 failure states | Phase 4 brief. The input guard is Phase 5 |
+| Intents | 15-intent taxonomy | 13 intents (`kpi_lookup` … `mixed_investigation`, `unsupported`) | Phase 4 brief |
+| Tools | `get_schema`, `get_kpi_definition`, `query_database`, `calculate_kpi`, `decompose_change`, `detect_anomalies`, `forecast_metric`, `find_at_risk_customers`, `generate_chart` | `get_kpi`, `analyze_revenue/customers/sales/marketing/support/product`, `get_cohort_analysis`, `get_customer_risk`, `forecast_metric`, `detect_anomalies`, `run_safe_sql` | Phase 4 brief. One tool per analytics domain with an `operation` argument keeps the catalogue small. Charts are Phase 8. The schema vocabulary goes to the understanding step as context instead of a tool |
+| LLM providers | offline, Anthropic, OpenAI | deterministic (alias `offline`), Anthropic | The brief allows only the selected provider. The protocol takes another provider without changes |
+| Offline behaviour | Template renderer | Rule-based understanding, intent playbooks with an evidence-driven follow-up, and claim composition, all behind the same interface and validation as a network model | Tests exercise the real graph without a network or key |
+| Claim types | OBSERVED / CALCULATED / INFERRED / RECOMMENDED | `observed_fact`, `calculated_result`, `inference`, `recommendation`; support `supported` / `partially_supported` / `unsupported`; evidence types observed / calculated / forecast / anomaly / derived | Phase 4 brief |
+| Repair loops | One evidence repair, one rewrite | `max_retries` (default 2) per LLM step, per retryable tool error and for response regeneration; `max_planning_iterations` (default 2) | Configurable limits from settings (brief) |
+| Over-budget plans | — | Rejected with "Investigation limit reached before sufficient evidence could be collected.", never silently truncated | Brief; a truncated playbook would answer a different question |
+| Failed validation | Drop failing claims | Unsupported claims are removed before writing. A draft that is still rejected ends in `validation_failure`, which names the failed checks and never repeats the rejected text | The user never sees a rejected number or causal sentence |
+| SQL | Validation, allow-list, LIMIT, read-only connection, per-query timeout | All except the per-query timeout (the run has a wall-clock limit). PII columns withheld, named parameters only | Per-query interruption is part of the Phase 5 security work |
+| SQL drafting | The LLM drafts SQL | `run_safe_sql` is available to the planner. The deterministic model never writes SQL | Registered tools cover the supported questions. Ad-hoc SQL is validated the same way whoever writes it |
+| Dependencies | LangGraph; provider SDKs as extras | `langgraph>=1.2,<2` (brings `langchain-core` and `langsmith` transitively; no other LangChain packages; LangSmith tracing stays off unless `LANGSMITH_TRACING` is set, which this project never does); `anthropic>=1.0` as the optional `[anthropic]` extra | Brief: LangGraph plus the provider package only |
+| Isolation test | — | `test_later_phase_modules_not_created` now checks `api`, `ui`, `guardrails`, `evaluation` and `mcp_server` (and no `mcp/`); Phase 4 has its own static boundary tests (`test_phase4_isolation.py`) | `agent` and `llm` now exist legitimately |
+| Branch base | From `main` | Built on the Phase 3 head, because Phase 3 (PR #5) was not yet merged into `main` | Phase 4 wraps Phase 3 services; the PR diff shrinks to Phase 4 once Phase 3 is merged |
+
+Exit criterion (§18: "answers the demo questions end-to-end with evidence"): 10 deterministic
+end-to-end scenarios run on the full generated dataset. They cover a KPI lookup, an MRR change,
+segment contribution, a multi-step revenue investigation, a forecast, an anomaly check, a
+support change, a churn ranking, unsupported requests and a causal question answered with
+insufficient evidence. Each checks its numbers against direct Phase 2/3 calls.
+
+Validation: 487 Phase 4 tests.
+
+| File | Tests | Covers |
+|---|---|---|
+| SQL safety | 41 | Statement validation |
+| evidence layer | 29 | Evidence graph and evidence validation |
+| response validation | 15 | Draft checks |
+| LLM layer | 27 | Schemas, prompts, providers |
+| deterministic model | 62 | Understanding, planning, composition |
+| tool registry | 48 | Catalogue and argument validation |
+| request validation | 18 | Validation outcomes |
+| static isolation | 167 | Package boundaries |
+| graph paths and bounds | 25 | Every transition, limit and failure state |
+| end-to-end scenarios | 17 | The 10 scenarios on the full dataset |
+| tools on the full dataset | 38 | Numbers vs direct Phase 2/3 calls; SQL truncation and read-only behaviour |
+
+No Phase 4 code reads the injected-event ground truth, the generator or the hidden
+customer-health mechanism, and no Phase 5+ functionality was implemented.
