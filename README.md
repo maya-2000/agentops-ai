@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 2 of 9 complete** (data foundation plus KPI framework and analytics engine).
+> **Status: Phase 2 of 9 complete.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
