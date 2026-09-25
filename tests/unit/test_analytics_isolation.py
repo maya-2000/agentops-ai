@@ -55,6 +55,8 @@ def test_no_driver_or_later_phase_dependencies(path: Path) -> None:
 
 
 def test_later_phase_modules_not_created() -> None:
-    # Phase 3 added app/timeseries, app/forecasting and app/anomalies (see test_phase3_isolation.py).
-    for name in ("agent", "llm", "api", "ui", "evidence", "guardrails", "tools", "evaluation"):
+    # Phase 3 added app/timeseries, app/forecasting and app/anomalies (see test_phase3_isolation.py);
+    # Phase 4 added app/agent, app/llm, app/tools and app/evidence (see test_phase4_isolation.py).
+    for name in ("api", "ui", "guardrails", "evaluation", "mcp_server"):
         assert not (PROJECT_ROOT / "app" / name).exists(), f"app/{name} belongs to a later phase"
+    assert not (PROJECT_ROOT / "mcp").exists(), "the MCP server belongs to Phase 6"
