@@ -7,6 +7,7 @@
 
 - KPI definitions, formulas and SQL: [kpi-catalog.md](kpi-catalog.md) (generated from the registry)
 - Schema and data conventions: [data-dictionary.md](data-dictionary.md)
+- Built on this layer (Phase 3): [forecasting.md](forecasting.md) and [anomaly-detection.md](anomaly-detection.md)
 
 ## 1. Architecture
 

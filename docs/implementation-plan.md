@@ -542,3 +542,189 @@ Validation: 287 Phase 2 tests. All 20 KPIs match an independent pandas reference
 four periods and several filters; reconciliation, identity, invariant, edge-case, isolation and
 performance tests; and a time-based backtest of the risk bands. Injected-event ground truth is
 not used by any analytics code or test.
+
+### Phase 3 (forecasting and anomaly detection) — complete
+
+Architecture and principles from Phase 0 are unchanged. Phase 3 adds three library packages that
+sit on top of Phase 2 and know nothing about agents, LLMs, prompts, MCP, HTTP or UIs:
+
+- `app/timeseries/`: the only Phase 3 database access, through `KPIService` and `mrr_series`.
+- `app/forecasting/`: models, rolling-origin backtests, selection and `ForecastService`.
+- `app/anomalies/`: detectors, the severity policy and `AnomalyService`.
+
+Details: [forecasting.md](forecasting.md) and [anomaly-detection.md](anomaly-detection.md).
+
+| Topic | Plan (§7.2, §7.3) | Implemented | Reason |
+|---|---|---|---|
+| Package layout | `app/forecasting/`, `app/anomaly/` | `app/timeseries/` (shared series preparation), `app/forecasting/`, `app/anomalies/` | One series layer feeds both, so forecasting and detection use identical numbers; plural name as in the Phase 3 brief |
+| Forecast targets | MRR, revenue, customer count | + support ticket volume and product adoption (one feature per request) | Phase 3 brief; every target is an existing KPI |
+| Models | naive, seasonal naive, SES/moving average, Holt / Holt-Winters, ARIMA | naive, seasonal naive, moving average, drift, ETS(A,Ad,N) damped trend | 24 monthly points: backtest folds have fewer than two seasonal cycles, so Holt-Winters could never be validated. One well-understood statistical model instead of a grid the history cannot discriminate |
+| Backtest | Last 6 months, horizon 1–3 | Expanding window from a 12-month initial window, every origin, horizons 1–6, at least 3 folds | Uses all the history; per-fold records for audit |
+| MAPE | Only when no zero/near-zero actuals | Same rule (near zero = below 1% of the mean absolute actual) plus WAPE | WAPE stays defined with zeros |
+| Selection | Lowest MAE, tie-break RMSE, must beat naive | As planned, plus a nested out-of-sample evaluation of the rule (`evaluate_selection`) | Backtest metrics of the selected model are optimistic; the nested evaluation is not |
+| Intervals | statsmodels where available, else empirical | Analytic (naive, seasonal naive, drift), residual-based (moving average), model-derived (ETS); empirical backtest coverage reported for every model | Measured coverage shows when intervals are too narrow (ETS was, see forecasting.md §13) |
+| Anomaly methods | Per metric: STL residual z-score, proportion tests, cross-sectional IQR, CUSUM change points | Rolling z-score, robust IQR (Tukey) and forecast residual on monthly series, each with level / difference / % change transforms | Phase 3 brief. STL needs at least two cycles inside the window. Proportion tests, cross-sectional campaign outliers and change-point detection are not implemented |
+| Severity | low / medium / high by \|z\| and % | normal / watch / significant / extreme; standardised cut-offs 2/3/4; Tukey fences 1.5/3 for IQR | Statistically interpretable, deterministic, documented per detector |
+| Exit criterion "E1/E2/E3/E5 detected" (§18) | Detection of four events | E1 and E2 detected by all three detectors (checked in a separate evaluation test). E3 is a cross-sectional campaign pattern (Phase 2 campaign analytics), and E5's feature series has 6 months, below the minimum history | Reported honestly rather than tuned to the ground truth |
+| Dependencies | statsmodels | statsmodels 0.15 (ETS) and scipy (t tail probabilities) | statsmodels 0.15 is the release tested with pandas 3; statsmodels needs a pandas index for prediction (worked around in `statistical.py`) |
+| Phase 2 test | — | `test_phase3_modules_not_created` became `test_later_phase_modules_not_created` (agent, llm, api, ui, ...) | It encoded "Phase 3 not started"; Phase 3 now has its own boundary tests (`test_phase3_isolation.py`) |
+
+Leakage prevention: queries are bounded by the cutoff, later cutoffs are rejected, folds use only
+their training slice, and anomaly baselines use only prior months. Regression tests alter the
+future (synthetic series and a copy of the real database) and assert that nothing at the cutoff
+changes. Validation: 373 Phase 3 tests, including an independent reference implementation
+(`tests/reference_timeseries.py`), leakage tests, missing-data and insufficient-history tests,
+integration tests on the generated dataset and latency budgets. No Phase 3 production code reads
+the injected-event ground truth or the hidden customer-health mechanism.
+
+### Phase 4 (LangGraph agent, tools and evidence layer) — complete
+
+Phase 4 adds four packages on top of Phases 1–3. The principle from Phase 0 is enforced
+structurally: the LLM understands, plans and words, and deterministic tools produce every number.
+
+- `app/tools/`: 12 typed tools over Phase 2/3, the allow-listed `ToolRegistry`, and SQL safety
+  (`sql_safety.py`).
+- `app/evidence/`: `Evidence`, `Claim`, the claim–evidence graph, `validate_evidence`,
+  `validate_response`, and number formatting and extraction.
+- `app/llm/`: the `LLMClient` protocol, prompts, strict output schemas, `DeterministicLLM`
+  (default, offline), `AnthropicLLM` (optional extra) and `ScriptedLLM` (tests).
+- `app/agent/`: `AgentState`, the LangGraph graph, request validation, claim builders, response
+  assembly, `AgentRunner`/`run_agent` and structured logging.
+
+Details: [agent-architecture.md](agent-architecture.md).
+
+| Topic | Plan (§8, §9, §10) | Implemented | Reason |
+|---|---|---|---|
+| Graph nodes | `input_guard`, `question_understood`, `plan_created`, `tools_selected`, ... | `question_received`, `understand_question`, `validate_request`, `plan_investigation`, `execute_tools`, `collect_evidence`, `validate_evidence`, `generate_response`, `validate_response`, `done` + 5 failure states | Phase 4 brief. The input guard is Phase 5 |
+| Intents | 15-intent taxonomy | 13 intents (`kpi_lookup` … `mixed_investigation`, `unsupported`) | Phase 4 brief |
+| Tools | `get_schema`, `get_kpi_definition`, `query_database`, `calculate_kpi`, `decompose_change`, `detect_anomalies`, `forecast_metric`, `find_at_risk_customers`, `generate_chart` | `get_kpi`, `analyze_revenue/customers/sales/marketing/support/product`, `get_cohort_analysis`, `get_customer_risk`, `forecast_metric`, `detect_anomalies`, `run_safe_sql` | Phase 4 brief. One tool per analytics domain with an `operation` argument keeps the catalogue small. Charts are Phase 8. The schema vocabulary goes to the understanding step as context instead of a tool |
+| LLM providers | offline, Anthropic, OpenAI | deterministic (alias `offline`), Anthropic | The brief allows only the selected provider. The protocol takes another provider without changes |
+| Offline behaviour | Template renderer | Rule-based understanding, intent playbooks with an evidence-driven follow-up, and claim composition, all behind the same interface and validation as a network model | Tests exercise the real graph without a network or key |
+| Claim types | OBSERVED / CALCULATED / INFERRED / RECOMMENDED | `observed_fact`, `calculated_result`, `inference`, `recommendation`; support `supported` / `partially_supported` / `unsupported`; evidence types observed / calculated / forecast / anomaly / derived | Phase 4 brief |
+| Repair loops | One evidence repair, one rewrite | `max_retries` (default 2) per LLM step, per retryable tool error and for response regeneration; `max_planning_iterations` (default 2) | Configurable limits from settings (brief) |
+| Over-budget plans | — | Rejected with "Investigation limit reached before sufficient evidence could be collected.", never silently truncated | Brief; a truncated playbook would answer a different question |
+| Failed validation | Drop failing claims | Unsupported claims are removed before writing. A draft that is still rejected ends in `validation_failure`, which names the failed checks and never repeats the rejected text | The user never sees a rejected number or causal sentence |
+| SQL | Validation, allow-list, LIMIT, read-only connection, per-query timeout | All except the per-query timeout (the run has a wall-clock limit). PII columns withheld, named parameters only | Per-query interruption is part of the Phase 5 security work |
+| SQL drafting | The LLM drafts SQL | `run_safe_sql` is available to the planner. The deterministic model never writes SQL | Registered tools cover the supported questions. Ad-hoc SQL is validated the same way whoever writes it |
+| Dependencies | LangGraph; provider SDKs as extras | `langgraph>=1.2,<2` (brings `langchain-core` and `langsmith` transitively; no other LangChain packages; LangSmith tracing stays off unless `LANGSMITH_TRACING` is set, which this project never does); `anthropic>=1.0` as the optional `[anthropic]` extra | Brief: LangGraph plus the provider package only |
+| Isolation test | — | `test_later_phase_modules_not_created` now checks `api`, `ui`, `guardrails`, `evaluation` and `mcp_server` (and no `mcp/`); Phase 4 has its own static boundary tests (`test_phase4_isolation.py`) | `agent` and `llm` now exist legitimately |
+| Branch base | From `main` | Built on the Phase 3 head, because Phase 3 (PR #5) was not yet merged into `main` | Phase 4 wraps Phase 3 services; the PR diff shrinks to Phase 4 once Phase 3 is merged |
+
+Exit criterion (§18: "answers the demo questions end-to-end with evidence"): 10 deterministic
+end-to-end scenarios run on the full generated dataset. They cover a KPI lookup, an MRR change,
+segment contribution, a multi-step revenue investigation, a forecast, an anomaly check, a
+support change, a churn ranking, unsupported requests and a causal question answered with
+insufficient evidence. Each checks its numbers against direct Phase 2/3 calls.
+
+Validation: 487 Phase 4 tests.
+
+| File | Tests | Covers |
+|---|---|---|
+| SQL safety | 41 | Statement validation |
+| evidence layer | 29 | Evidence graph and evidence validation |
+| response validation | 15 | Draft checks |
+| LLM layer | 27 | Schemas, prompts, providers |
+| deterministic model | 62 | Understanding, planning, composition |
+| tool registry | 48 | Catalogue and argument validation |
+| request validation | 18 | Validation outcomes |
+| static isolation | 167 | Package boundaries |
+| graph paths and bounds | 25 | Every transition, limit and failure state |
+| end-to-end scenarios | 17 | The 10 scenarios on the full dataset |
+| tools on the full dataset | 38 | Numbers vs direct Phase 2/3 calls; SQL truncation and read-only behaviour |
+
+No Phase 4 code reads the injected-event ground truth, the generator or the hidden
+customer-health mechanism, and no Phase 5+ functionality was implemented.
+
+### Phase 5 (guardrails, security and reliability) — complete
+
+These are application-level security controls for the prototype, not production-grade security.
+The model proposes; the application decides. Phase 5 adds `app/security/` and wires every
+boundary into the existing Phase 4 graph nodes. The node list and the Phase 4 behaviour are
+unchanged, and all Phase 4 tests pass unmodified.
+
+| Module | Responsibility |
+|---|---|
+| `limits.py` | `SecurityLimits`: every limit, immutable, from `AGENT_*` settings |
+| `validators.py` | Central value validators (metrics, dimensions, filters, dates, periods, horizons, detectors, enums, text, finite numbers) |
+| `input_guard.py` | Question and model-understanding validation; secret redaction |
+| `injection.py` | Prompt-injection screen (`block` / `restrict`) |
+| `authorization.py` | `ToolAuthorizationPolicy`: allowlist, enabled, intent permissions, SQL privilege, argument policy, budget, prerequisites |
+| `plan_validator.py` | `PlanValidator` over untrusted plans; policy denials are not retried |
+| `data_policy.py` | Explicit approved tables, views and columns; withheld and PII columns; customer-level caps |
+| `output_guard.py` | Tool-output validation; safe response shortening |
+| `budget.py`, `retry.py`, `timeouts.py`, `context.py` | Run budget, retry policy, model-call timeout, context budget |
+| `redaction.py`, `errors.py`, `events.py` | Secret redaction, error sanitisation, security audit events |
+
+Changes outside `app/security/`, each small and justified by a security requirement:
+
+- **SQL validator:** `app/tools/sql_safety.py` is hardened. It uses the data policy, adds
+  complexity limits and an allowlist for unrecognised functions, rejects recursive CTEs, and
+  emits comment-free SQL.
+- **Deadlines:** `app/database/deadline.py` adds execution deadlines. The DuckDB backend enforces
+  them with `interrupt()`, and the query runner maps them to a `timeout` error.
+- **Evidence:**
+  - evidence items record their input arguments and a SHA-256 fingerprint, sealed on insert;
+  - evidence IDs are format-checked;
+  - claims gain `causal_basis`;
+  - the evidence and response validators gain integrity, forecast, anomaly, direction,
+    causality and recommendation rules.
+- **Prompts:** they state the trust model, and the question is rendered as escaped, delimited
+  untrusted data.
+- **Agent:**
+  - `AgentConfig` extends `SecurityLimits`;
+  - the state and the run result carry security events, budget usage, retries and the
+    screening verdict;
+  - user-facing errors are safe categories;
+  - responses are redacted;
+  - request validation uses the central validators.
+
+Details: [security-architecture.md](security-architecture.md) and
+[security-threat-model.md](security-threat-model.md) (25 threats, with residual risks).
+
+| Topic | Plan (§10, §18) | Implemented | Reason |
+|---|---|---|---|
+| Package and docs | `app/guardrails/`, `docs/security.md` | `app/security/`; `docs/security-threat-model.md` and `docs/security-architecture.md` | The layer covers authorization, budgets and audit, not only guardrails. The document names follow the Phase 5 brief |
+| Prompt injection | Pattern and heuristic detector; refusal offering legitimate help | Deterministic screen with `block` (refuse before any model or tool call; the scope statement says what the agent can do) and `restrict` (answer with SQL revoked). Delimited untrusted question. Trust model in the prompts. Authorization independent of the text | A heuristic alone is not a control. The structural layers carry the guarantee |
+| Tool permissions | Read-only tools only | Plus per-intent permissions, a SQL privilege revoked by flagged input, configurable disabled tools, and authorization at planning and at execution | Least privilege; the model cannot widen its own permissions |
+| SQL timeout | Watchdog thread interrupt | Context-variable execution deadlines enforced by the backend with `interrupt()`. Tool timeouts via the same deadline plus a post-hoc check. Model-call timeout on a worker thread | Tools must stay on the connection's thread; pure-Python work is bounded by the next query and the run clock (documented residual risk) |
+| PII | Masked in tool outputs and logs | Withheld from SQL entirely (`sales_rep`, and also `company_name`). Allowed only in the one declared operation (`rep_performance`). Never in evidence, prompts or logs | Withholding is stricter than masking; analytics do not need the fields |
+| Uncertainty | A per-response confidence level | Per-evidence and per-claim confidence, deterministic caveats (intervals, anomaly meaning, association-only, truncation, limits), the insufficient-evidence path | A single score would hide which part is uncertain. The Phase 5 brief did not require one |
+| Output validation | Rewrite once, then drop claims | Bounded regeneration, then safe item-level shortening for length only, otherwise fail closed. New rules for direction, forecast certainty, anomaly judgement, recommendation framing and causal basis | Phase 5 brief |
+| Resource limits | `AGENT_MAX_TOOL_CALLS`, repair loops | A full per-run budget (tool calls, SQL calls and rows, retries, model calls, context, response, runtime), all configurable | Phase 5 brief |
+
+Exit criterion (§18: "Security suite passes; read-only enforcement proven"): 516 Phase 5
+tests in `tests/security/`.
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_sql_attacks.py` | 64 | Write/DDL/commands, filesystem/network/system functions, the exposure policy, complexity, injection through values and comments, row bounds, timeouts, the read-only connection |
+| `test_prompt_injection.py` | 57 | Screen categories, obfuscation, zero false positives on business questions, prompt separation |
+| `test_tool_authorization.py` | 55 | Allowlist, disabled/unknown/unpermitted tools, SQL privilege, argument policy, budget, prerequisites, plan validation, every deterministic playbook authorised |
+| `test_adversarial_inputs.py` | 40 | The brief's 10 prompts and 12 more; a compromised model proposing SQL, DDL, unpermitted or invented tools, unknown vocabulary, invented numbers or causes, directives |
+| `test_output_guardrails.py` | 34 | Tool-output validation, evidence sealing and tampering, claim integrity, forecast/anomaly/causality/recommendation wording |
+| `test_input_guard.py` | 24 | Input guard, central validators, limits |
+| `test_secret_protection.py` | 22 | Redaction of known formats, assignments, registered and environment secrets; error sanitisation; secrets in questions, tool errors, provider errors and model output |
+| `test_ground_truth_isolation.py` | 19 | Regression: an audit hook proves no file, process, network or `exec` activity during runs; the dataset's own ground-truth text never reaches prompts, logs or results; no hidden-state schema; no path-like tool arguments |
+| `test_resource_limits.py` | 19 | Tool, retry, SQL, context, response, tool-time, model-time and wall-clock limits |
+| `test_security_audit.py` | 11 | Event model, severities, redaction, logging, the audit trail in the run result |
+| `test_security_isolation.py` | 171 | AST-based static checks: no dynamic code execution anywhere, no filesystem or network access in the agent path, approved dependencies only, no Phase 6+ packages |
+
+Findings while testing, fixed in this phase:
+- the executed SQL kept comments;
+- JSON-style `"token": "…"` secrets were not redacted;
+- the raw question was echoed in the run result;
+- exception text reached the user-facing trace;
+- redaction rescanned the environment on every call (a performance fix).
+
+Performance (A-B-A-B against the Phase 4 head, full dataset, deterministic model):
+
+| Scenario | Overhead |
+|---|---|
+| Simple KPI | +3.9 ms (+13%) |
+| Multi-tool investigation | +37.5 ms (+9%) |
+| Forecast | +23.0 ms (+8%) |
+| Anomaly check | +29.4 ms (+10%) |
+
+No Phase 5 code reads the injected-event ground truth, the generator or the hidden
+customer-health mechanism. No MCP, API, UI, benchmark or other Phase 6+ functionality was
+implemented, and no dependency was added.

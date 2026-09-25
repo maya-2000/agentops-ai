@@ -63,3 +63,9 @@ class AnalyticsDatabaseError(AnalyticsError):
     """The database raised an error while executing an analytics query."""
 
     code = "database_error"
+
+
+class QueryTimeoutAnalyticsError(AnalyticsError):
+    """A query exceeded its execution deadline (not retried: the same query would time out again)."""
+
+    code = "timeout"

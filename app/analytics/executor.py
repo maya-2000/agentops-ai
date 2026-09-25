@@ -17,9 +17,10 @@ import re
 from datetime import date
 from typing import Any
 
-from app.analytics.errors import AnalyticsDatabaseError, AnalyticsError
+from app.analytics.errors import AnalyticsDatabaseError, AnalyticsError, QueryTimeoutAnalyticsError
 from app.analytics.models import Provenance, QueryTrace
 from app.database.base import Database, QueryResult
+from app.database.deadline import QueryTimeoutError
 from app.database.lineage import new_tool_run_id
 
 _PARAM_RE = re.compile(r"\$([a-z_][a-z0-9_]*)")
@@ -53,6 +54,8 @@ class QueryRunner:
             result = self.db.query(sql, bound, tool_run_id=self.operation_id, calculation=calculation)
         except AnalyticsError:
             raise
+        except QueryTimeoutError as exc:
+            raise QueryTimeoutAnalyticsError(f"{self.operation}: {exc}") from exc
         except Exception as exc:  # driver-specific errors are normalised at this boundary
             raise AnalyticsDatabaseError(f"{self.operation}: query failed: {exc}") from exc
         self.traces.append(
