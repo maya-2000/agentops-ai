@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 4 of 9 complete.**
+> **Status: Phase 5 of 9 complete.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
@@ -16,7 +16,7 @@ observed facts separate from inference and says when the evidence is insufficien
 | 2 | KPI framework and analytics engine (20 KPIs, 8 analytics modules, independent validation) | ✅ |
 | 3 | Forecasting and anomaly detection | ✅ |
 | 4 | LangGraph agent, tools, evidence layer | ✅ |
-| 5 | Guardrails and security | ⏳ |
+| 5 | Guardrails, security and reliability | ✅ |
 | 6 | MCP server | ⏳ |
 | 7 | Evaluation framework (50+ benchmark questions) | ⏳ |
 | 8 | FastAPI and Streamlit | ⏳ |
@@ -133,6 +133,42 @@ result.tool_trace                # every tool call with inputs, status, timing a
 
 Details: [`docs/agent-architecture.md`](docs/agent-architecture.md)
 
+## Security and reliability
+
+Application-level security controls are implemented for the prototype. This is not
+production-grade security: authentication, multi-tenancy and network exposure come with the
+later phases. The principle is **the model can propose; the application decides.**
+
+- **Untrusted input.**
+  - The question is type- and size-checked, and secrets are redacted before anything sees it.
+  - A deterministic prompt-injection screen blocks requests for secrets, hidden or ground-truth
+    data, files, code, the system prompt, disabling checks or changing limits.
+  - Instruction overrides are answered with reduced privileges (no ad-hoc SQL).
+- **Authorization.** Every tool call is authorised twice, at planning and just before execution,
+  against:
+  - an explicit allowlist and the tools permitted for the validated intent;
+  - validated arguments and the data-exposure policy;
+  - the run budget.
+
+  A policy denial is never retried.
+- **SQL.**
+  - Read-only, single `SELECT` over allow-listed tables and columns (PII withheld).
+  - Complexity limits, bound parameters, a row cap with truncation flags.
+  - A statement timeout and a read-only connection.
+- **Bounded.** Tool calls, retries, SQL calls and rows, model calls, context, response length and
+  time are all limited and configurable (`AGENT_*`).
+- **Output.**
+  - Tool outputs are validated before they become evidence, and evidence is sealed with SHA-256
+    fingerprints.
+  - The response is checked for unsupported numbers, contradicted directions, causal claims,
+    forecasts stated as facts, anomalies judged as good or bad, and directive recommendations.
+- **Audit.** Every decision is a typed `SecurityEvent` (INFO/WARNING/HIGH/CRITICAL). Errors reach
+  users only as safe categories.
+- **Ground truth.** The agent reaches data only through approved tools. A regression suite with a
+  Python audit hook shows that no file, process or network access happens during agent runs.
+
+Details: [`docs/security-architecture.md`](docs/security-architecture.md) · threats and residual risks: [`docs/security-threat-model.md`](docs/security-threat-model.md)
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -166,14 +202,17 @@ app/
   evidence/              evidence and claim models, claim-evidence graph, evidence and response validators
   llm/                   provider-neutral LLM interface, prompts, output schemas, deterministic + Anthropic providers
   agent/                 LangGraph state machine, request validation, claim builders, responses, runner
+  security/              limits, input guard, prompt-injection screen, tool authorization, plan validator,
+                         data-exposure policy, output guard, budgets, retries, timeouts, redaction, audit events
 data/
   generator/             reproducible synthetic-data pipeline (CLI: python -m data.generator.generate)
   metadata/              dataset manifest, checksums, machine-readable data dictionary
   seeds/                 injected-event ground truth (evaluation only; never exposed to the agent)
 database/                DuckDB file (generated, git-ignored)
 docs/                    implementation plan, data dictionary, analytics guide, KPI catalog,
-                         forecasting and anomaly-detection guides, agent architecture
-tests/                   unit and integration tests
+                         forecasting and anomaly-detection guides, agent architecture,
+                         security architecture and threat model
+tests/                   unit, integration and security (adversarial, SQL attack, regression) tests
 ```
 
 ## License

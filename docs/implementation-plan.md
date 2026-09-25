@@ -634,3 +634,97 @@ Validation: 487 Phase 4 tests.
 
 No Phase 4 code reads the injected-event ground truth, the generator or the hidden
 customer-health mechanism, and no Phase 5+ functionality was implemented.
+
+### Phase 5 (guardrails, security and reliability) — complete
+
+These are application-level security controls for the prototype, not production-grade security.
+The model proposes; the application decides. Phase 5 adds `app/security/` and wires every
+boundary into the existing Phase 4 graph nodes. The node list and the Phase 4 behaviour are
+unchanged, and all Phase 4 tests pass unmodified.
+
+| Module | Responsibility |
+|---|---|
+| `limits.py` | `SecurityLimits`: every limit, immutable, from `AGENT_*` settings |
+| `validators.py` | Central value validators (metrics, dimensions, filters, dates, periods, horizons, detectors, enums, text, finite numbers) |
+| `input_guard.py` | Question and model-understanding validation; secret redaction |
+| `injection.py` | Prompt-injection screen (`block` / `restrict`) |
+| `authorization.py` | `ToolAuthorizationPolicy`: allowlist, enabled, intent permissions, SQL privilege, argument policy, budget, prerequisites |
+| `plan_validator.py` | `PlanValidator` over untrusted plans; policy denials are not retried |
+| `data_policy.py` | Explicit approved tables, views and columns; withheld and PII columns; customer-level caps |
+| `output_guard.py` | Tool-output validation; safe response shortening |
+| `budget.py`, `retry.py`, `timeouts.py`, `context.py` | Run budget, retry policy, model-call timeout, context budget |
+| `redaction.py`, `errors.py`, `events.py` | Secret redaction, error sanitisation, security audit events |
+
+Changes outside `app/security/`, each small and justified by a security requirement:
+
+- **SQL validator:** `app/tools/sql_safety.py` is hardened. It uses the data policy, adds
+  complexity limits and an allowlist for unrecognised functions, rejects recursive CTEs, and
+  emits comment-free SQL.
+- **Deadlines:** `app/database/deadline.py` adds execution deadlines. The DuckDB backend enforces
+  them with `interrupt()`, and the query runner maps them to a `timeout` error.
+- **Evidence:**
+  - evidence items record their input arguments and a SHA-256 fingerprint, sealed on insert;
+  - evidence IDs are format-checked;
+  - claims gain `causal_basis`;
+  - the evidence and response validators gain integrity, forecast, anomaly, direction,
+    causality and recommendation rules.
+- **Prompts:** they state the trust model, and the question is rendered as escaped, delimited
+  untrusted data.
+- **Agent:**
+  - `AgentConfig` extends `SecurityLimits`;
+  - the state and the run result carry security events, budget usage, retries and the
+    screening verdict;
+  - user-facing errors are safe categories;
+  - responses are redacted;
+  - request validation uses the central validators.
+
+Details: [security-architecture.md](security-architecture.md) and
+[security-threat-model.md](security-threat-model.md) (25 threats, with residual risks).
+
+| Topic | Plan (§10, §18) | Implemented | Reason |
+|---|---|---|---|
+| Package and docs | `app/guardrails/`, `docs/security.md` | `app/security/`; `docs/security-threat-model.md` and `docs/security-architecture.md` | The layer covers authorization, budgets and audit, not only guardrails. The document names follow the Phase 5 brief |
+| Prompt injection | Pattern and heuristic detector; refusal offering legitimate help | Deterministic screen with `block` (refuse before any model or tool call; the scope statement says what the agent can do) and `restrict` (answer with SQL revoked). Delimited untrusted question. Trust model in the prompts. Authorization independent of the text | A heuristic alone is not a control. The structural layers carry the guarantee |
+| Tool permissions | Read-only tools only | Plus per-intent permissions, a SQL privilege revoked by flagged input, configurable disabled tools, and authorization at planning and at execution | Least privilege; the model cannot widen its own permissions |
+| SQL timeout | Watchdog thread interrupt | Context-variable execution deadlines enforced by the backend with `interrupt()`. Tool timeouts via the same deadline plus a post-hoc check. Model-call timeout on a worker thread | Tools must stay on the connection's thread; pure-Python work is bounded by the next query and the run clock (documented residual risk) |
+| PII | Masked in tool outputs and logs | Withheld from SQL entirely (`sales_rep`, and also `company_name`). Allowed only in the one declared operation (`rep_performance`). Never in evidence, prompts or logs | Withholding is stricter than masking; analytics do not need the fields |
+| Uncertainty | A per-response confidence level | Per-evidence and per-claim confidence, deterministic caveats (intervals, anomaly meaning, association-only, truncation, limits), the insufficient-evidence path | A single score would hide which part is uncertain. The Phase 5 brief did not require one |
+| Output validation | Rewrite once, then drop claims | Bounded regeneration, then safe item-level shortening for length only, otherwise fail closed. New rules for direction, forecast certainty, anomaly judgement, recommendation framing and causal basis | Phase 5 brief |
+| Resource limits | `AGENT_MAX_TOOL_CALLS`, repair loops | A full per-run budget (tool calls, SQL calls and rows, retries, model calls, context, response, runtime), all configurable | Phase 5 brief |
+
+Exit criterion (§18: "Security suite passes; read-only enforcement proven"): 516 Phase 5
+tests in `tests/security/`.
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_sql_attacks.py` | 64 | Write/DDL/commands, filesystem/network/system functions, the exposure policy, complexity, injection through values and comments, row bounds, timeouts, the read-only connection |
+| `test_prompt_injection.py` | 57 | Screen categories, obfuscation, zero false positives on business questions, prompt separation |
+| `test_tool_authorization.py` | 55 | Allowlist, disabled/unknown/unpermitted tools, SQL privilege, argument policy, budget, prerequisites, plan validation, every deterministic playbook authorised |
+| `test_adversarial_inputs.py` | 40 | The brief's 10 prompts and 12 more; a compromised model proposing SQL, DDL, unpermitted or invented tools, unknown vocabulary, invented numbers or causes, directives |
+| `test_output_guardrails.py` | 34 | Tool-output validation, evidence sealing and tampering, claim integrity, forecast/anomaly/causality/recommendation wording |
+| `test_input_guard.py` | 24 | Input guard, central validators, limits |
+| `test_secret_protection.py` | 22 | Redaction of known formats, assignments, registered and environment secrets; error sanitisation; secrets in questions, tool errors, provider errors and model output |
+| `test_ground_truth_isolation.py` | 19 | Regression: an audit hook proves no file, process, network or `exec` activity during runs; the dataset's own ground-truth text never reaches prompts, logs or results; no hidden-state schema; no path-like tool arguments |
+| `test_resource_limits.py` | 19 | Tool, retry, SQL, context, response, tool-time, model-time and wall-clock limits |
+| `test_security_audit.py` | 11 | Event model, severities, redaction, logging, the audit trail in the run result |
+| `test_security_isolation.py` | 171 | AST-based static checks: no dynamic code execution anywhere, no filesystem or network access in the agent path, approved dependencies only, no Phase 6+ packages |
+
+Findings while testing, fixed in this phase:
+- the executed SQL kept comments;
+- JSON-style `"token": "…"` secrets were not redacted;
+- the raw question was echoed in the run result;
+- exception text reached the user-facing trace;
+- redaction rescanned the environment on every call (a performance fix).
+
+Performance (A-B-A-B against the Phase 4 head, full dataset, deterministic model):
+
+| Scenario | Overhead |
+|---|---|
+| Simple KPI | +3.9 ms (+13%) |
+| Multi-tool investigation | +37.5 ms (+9%) |
+| Forecast | +23.0 ms (+8%) |
+| Anomaly check | +29.4 ms (+10%) |
+
+No Phase 5 code reads the injected-event ground truth, the generator or the hidden
+customer-health mechanism. No MCP, API, UI, benchmark or other Phase 6+ functionality was
+implemented, and no dependency was added.

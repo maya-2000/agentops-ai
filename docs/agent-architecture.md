@@ -9,6 +9,7 @@
 - KPI definitions: [kpi-catalog.md](kpi-catalog.md) · analytics: [analytics.md](analytics.md)
 - Forecasting: [forecasting.md](forecasting.md) · anomaly detection: [anomaly-detection.md](anomaly-detection.md)
 - Plan and phase notes: [implementation-plan.md](implementation-plan.md)
+- Security (Phase 5): [security-architecture.md](security-architecture.md) · [security-threat-model.md](security-threat-model.md)
 
 ## 1. Agent architecture
 
@@ -98,8 +99,10 @@ an insufficient-evidence or validation-failure response still shows them. `done`
 | Evidence | `evidence_graph` (`EvidenceGraph`), `evidence_validation` |
 | Response | `response_draft`, `response_validation`, `response` (`AgentResponse`), `response_generated_by` |
 | Control | `retry_count`, `tool_retries`, `llm_retries`, `llm_calls` (`LLMCallRecord`), `limit_reached`, `status`, `status_message`, `errors`, `transitions`, `route` |
+| Security (Phase 5) | `question_is_text`, `question_redacted`, `input_screen` (`InjectionScan`), `sql_permitted`, `security_events` (`SecurityEvent`), `budget_usage` (`BudgetUsage`), `retries` (`RetryRecord`), `response_trimmed` |
 
-It holds no database connection, no model client, no secrets and no prompts. `LLMCallRecord`
+It holds no database connection, no model client, no secrets and no prompts. The question is
+stored redacted. `LLMCallRecord`
 stores the task, provider, model, attempts, token counts and the error, not the prompt.
 Convenience views: `intent`, `date_range`, `filters`.
 
@@ -295,7 +298,18 @@ the most concentrated country) is read from evidence at run time.
 
 ## 13. Retry limits
 
-All limits come from settings (`AGENT_*`, `LLM_*`) through `AgentConfig`:
+All limits come from settings (`AGENT_*`, `LLM_*`) through `AgentConfig`, which extends
+`SecurityLimits`. Phase 5 added limits for:
+- filters and dimensions;
+- plan steps;
+- SQL calls, rows, length, joins and nesting;
+- customer-level rows;
+- context size;
+- tool, SQL and model timeouts.
+
+It also added the per-run `RunBudget`. The full table is in
+[security-architecture.md](security-architecture.md) §9.
+The limits from Phase 4:
 
 | Limit | Default | Applies to |
 |---|---|---|
@@ -308,14 +322,27 @@ All limits come from settings (`AGENT_*`, `LLM_*`) through `AgentConfig`:
 | `max_question_chars` | 1000 | Question text |
 | `recursion_limit` | derived | LangGraph super-step bound computed from the limits above |
 
-Retries feed the validation errors back to the model (`context["feedback"]`). Non-retryable tool
-errors (invalid arguments, unsafe SQL, unsupported KPI) are not retried.
+Retries feed the validation errors back to the model (`context["feedback"]`). Since Phase 5, a
+`RetryPolicy` decides:
+- only transient failures are retried (database errors, retryable provider errors, model
+  timeouts, malformed model output);
+- policy denials and unknown failures are never retried;
+- every retry is recorded as a `RetryRecord` and a `retry` event.
 
 ## 14. SQL safety
 
-`run_safe_sql` is the minimum safety required in Phase 4. Formal guardrails are Phase 5.
-`validate_sql` parses with sqlglot (DuckDB dialect) and accepts a statement only if all of the
-following hold:
+`run_safe_sql` was the minimum SQL safety in Phase 4 and was hardened in Phase 5:
+- an explicit data-exposure policy (tables, views and exposed columns);
+- a length limit, mandatory join conditions and limits on joins, nesting and CTEs;
+- no recursive CTEs;
+- an allowlist for unrecognised functions;
+- parameter limits;
+- comment-free executed SQL;
+- a statement timeout (DuckDB interrupt), and SQL call and row budgets.
+
+The full list is in
+[security-architecture.md](security-architecture.md) §8.
+The Phase 4 rules, all still in force:
 
 1. Exactly one statement, and it is a `SELECT` (with optional CTEs) or a set operation of
    selects. Refused: `INSERT/UPDATE/DELETE/MERGE`, `CREATE/DROP/ALTER`,
@@ -382,18 +409,31 @@ database files itself.
 associations, with status `insufficient_evidence` and a caveat that the analysis does not
 establish causes.
 
-## 17. How Phase 5 will extend security
+## 17. Phase 5 security (implemented)
 
-Phase 5 adds the formal guardrails framework on top of these boundaries:
-- input screening (prompt injection, destructive intent, PII scrubbing in logs)
-- a security test suite (injection and exfiltration attempts)
-- per-query timeouts on SQL execution
-- policy configuration for the SQL allow-list
-- uncertainty labelling
+Phase 5 added `app/security/` and wired each boundary into the existing nodes. The node list did
+not change. Each node, and the controls it now runs:
 
-The Phase 4 checks stay as the innermost layer. These are the strict tool schemas, the SQL
-validator, the read-only connection, the evidence and response validators, and the logging
-allow-list.
+- `question_received`: input guard (type, size, control characters); secret redaction; the
+  prompt-injection screen (block, or restrict so that SQL is revoked).
+- `understand_question`, `plan_investigation`, `generate_response`: a context budget and a
+  model-call timeout; untrusted output is validated.
+- `validate_request`: input limits.
+- `plan_investigation`: the plan validator authorizes every step. A policy denial fails closed
+  without a retry.
+- `execute_tools`:
+  - each call is authorized again just before it runs and charged to the run budget;
+  - tool and SQL deadlines apply, and retries follow the retry policy;
+  - the output is validated before it can become evidence.
+- `validate_evidence`: evidence integrity (SHA-256 fingerprints).
+- `validate_response`: numbers, direction, causality, forecast certainty, anomaly judgement,
+  recommendation framing and length. Regeneration is bounded, then an over-long draft is shortened
+  safely.
+- `done` and the failure states: the response is redacted and errors are shown as safe
+  categories. Every decision is a `SecurityEvent` in the run result.
+
+The Phase 4 checks remain the inner layer. Details: [security-architecture.md](security-architecture.md).
+Threats and residual risks: [security-threat-model.md](security-threat-model.md).
 
 ## 18. How Phase 6 will expose tools through MCP
 
