@@ -20,7 +20,7 @@ class SingaporeEnterpriseChurnWave:  # E1
     month: date = date(2026, 8, 1)
     country: str = "Singapore"
     segment: str = "Enterprise"
-    churn_share: float = 0.20
+    churn_share: float = 0.09
     contraction_share: float = 0.30
     contraction_factor: tuple[float, float] = (0.55, 0.80)
     last_service_day_window: tuple[date, date] = (date(2026, 8, 1), date(2026, 8, 12))
@@ -98,13 +98,14 @@ EVENT_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "E1": {
         "name": "Singapore Enterprise churn wave",
         "description": (
-            "In August 2026 a cluster of Singapore Enterprise accounts churned at renewal and "
+            "In August 2026 about 9% of Singapore Enterprise accounts churned at renewal and "
             "several others contracted, preceded by Billing complaints in July-August."
         ),
         "expected_signals": (
-            "August 2026 revenue/MRR decline; Singapore and Enterprise are the largest negative "
-            "contributors; SG Enterprise logo churn far above its baseline; Billing tickets with "
-            "negative sentiment from SG Enterprise accounts."
+            "August 2026 revenue/MRR decline; Singapore is the largest negative country contributor "
+            "and Singapore Enterprise the largest negative country/segment cell; SG Enterprise logo "
+            "churn far above its baseline; Billing tickets with negative sentiment from SG Enterprise "
+            "accounts."
         ),
     },
     "E2": {

@@ -2,7 +2,7 @@
   "dataset_name": "Northwind Cloud",
   "dataset_version": "1.0.0",
   "random_seed": 42,
-  "generation_timestamp": "2026-09-24T16:36:37+00:00",
+  "generation_timestamp": "2026-09-25T02:29:07+00:00",
   "period_start": "2024-09-01",
   "period_end": "2026-08-31",
   "currency": "SGD",
@@ -17,13 +17,13 @@
       "row_count": 5000
     },
     "subscriptions": {
-      "row_count": 7045
+      "row_count": 7040
     },
     "usage_events": {
-      "row_count": 306287
+      "row_count": 306322
     },
     "sales_opportunities": {
-      "row_count": 12537
+      "row_count": 12692
     },
     "support_tickets": {
       "row_count": 55265
@@ -32,7 +32,7 @@
       "row_count": 555
     },
     "daily_revenue": {
-      "row_count": 2395948
+      "row_count": 2395649
     },
     "product_features": {
       "row_count": 8213
