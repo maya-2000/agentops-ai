@@ -17,10 +17,18 @@ dependencies = [
     "pandas>=2.2,<4",
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.3,<3",
+    # Phase 3: ETS(A,Ad,N) with analytic prediction intervals (statsmodels) and t tail probabilities (scipy).
+    # statsmodels 0.15 is the release tested with pandas 3.
+    "scipy>=1.13,<2",
     "sqlglot>=25",
+    "statsmodels>=0.15,<0.16",
+    # Phase 4: the agent's state machine. langchain-core comes in transitively; no other LangChain packages are used.
+    "langgraph>=1.2,<2",
 ]
 
 [project.optional-dependencies]
+# Phase 4: optional network LLM provider (LLM_PROVIDER=anthropic). The default deterministic provider needs nothing.
+anthropic = ["anthropic>=1.0"]
 dev = [
     "pytest>=8",
     "pytest-cov>=5",

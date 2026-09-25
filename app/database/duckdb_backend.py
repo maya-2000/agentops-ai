@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 import duckdb
 
 from app.database.base import QueryResult
+from app.database.deadline import QueryTimeoutError, remaining_seconds
 from app.database.lineage import LineageRecord, extract_source_tables, new_query_id
 
 
@@ -19,6 +21,9 @@ class DuckDBDatabase:
 
     The connection is opened ``read_only=True`` unless explicitly requested otherwise, so the
     engine itself refuses writes. Only the data loader opens a writable connection.
+
+    Queries honour the active ``execution_deadline``: a query is not started after the deadline
+    and is interrupted (``connection.interrupt``) when the deadline passes during execution.
     """
 
     def __init__(self, path: Path, *, dataset_version: str = "unknown", read_only: bool = True):
@@ -40,9 +45,21 @@ class DuckDBDatabase:
         calculation: str | None = None,
     ) -> QueryResult:
         query_id = new_query_id()
+        remaining = remaining_seconds()
+        if remaining is not None and remaining <= 0:
+            raise QueryTimeoutError("Query not started: the execution deadline has passed")
+        timer = threading.Timer(remaining, self._con.interrupt) if remaining is not None else None
         started = time.perf_counter()
-        cursor = self._con.execute(sql, params or [])
-        rows = cursor.fetchall()
+        try:
+            if timer is not None:
+                timer.start()
+            cursor = self._con.execute(sql, params or [])
+            rows = cursor.fetchall()
+        except duckdb.InterruptException as exc:
+            raise QueryTimeoutError("Query interrupted: the execution deadline passed") from exc
+        finally:
+            if timer is not None:
+                timer.cancel()
         elapsed_ms = (time.perf_counter() - started) * 1000
         columns = [d[0] for d in cursor.description] if cursor.description else []
         lineage = LineageRecord(
