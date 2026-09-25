@@ -25,6 +25,7 @@ from app.analytics.kpis import KPI_KEYS, KPI_REGISTRY
 from app.analytics.periods import Period, previous_period, resolve_period
 from app.forecasting.config import SUPPORTED_HORIZONS
 from app.llm.schemas import Intent, UnderstandingOutput
+from app.security.validators import check_dimension, check_filters, check_horizon, check_kpi, check_series_metric
 from app.timeseries.metrics import SERIES_METRIC_KEYS
 
 Outcome = Literal["valid", "unsupported", "clarify", "insufficient"]
@@ -70,12 +71,12 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
 
     assumptions: list[str] = []
     metric = u.metric.strip().lower() if u.metric else None
-    if metric is not None and metric not in KPI_REGISTRY:
+    if metric is not None and check_kpi(metric):
         return RequestValidation(
             outcome="unsupported",
             message=f"The metric {u.metric!r} is not available. Supported KPIs: {', '.join(KPI_KEYS)}.",
         )
-    if u.intent in _SERIES_INTENTS and metric is not None and metric not in SERIES_METRIC_KEYS:
+    if u.intent in _SERIES_INTENTS and metric is not None and check_series_metric(metric):
         return RequestValidation(
             outcome="insufficient",
             message=(
@@ -89,14 +90,20 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
         )
 
     for dimension in u.dimensions:
-        if dimension not in DIMENSIONS:
+        if check_dimension(dimension):
             return RequestValidation(
                 outcome="unsupported",
                 message=f"The dimension {dimension!r} is not supported. Supported: {', '.join(DIMENSIONS)}.",
             )
+    requested = {f.dimension: f.value for f in u.filters}
+    for problem in check_filters(requested, max_filters=len(requested)):
+        if problem.code == "invalid_filter_value":
+            message = f"No data exists for that filter: {problem.message}"
+            return RequestValidation(outcome="insufficient", message=message)
+        return RequestValidation(outcome="unsupported", message=f"Unsupported filter: {problem.message}")
     try:
-        filters = Filters(**{f.dimension: f.value for f in u.filters}).active()
-    except InvalidFilterValueError as exc:
+        filters = Filters(**requested).active()
+    except InvalidFilterValueError as exc:  # lookup dimensions are checked against the data here
         return RequestValidation(outcome="insufficient", message=f"No data exists for that filter: {exc}")
     except (UnsupportedDimensionError, TypeError, ValueError) as exc:
         return RequestValidation(outcome="unsupported", message=f"Unsupported filter: {exc}")
@@ -108,7 +115,7 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
         horizon = u.horizon if u.horizon is not None else 1
         if u.horizon is None:
             assumptions.append("No horizon given; forecasting the next month.")
-        if horizon not in SUPPORTED_HORIZONS:
+        if check_horizon(horizon):
             return RequestValidation(
                 outcome="insufficient",
                 message=(
