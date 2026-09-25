@@ -18,6 +18,8 @@ may expose.
 - **PII in analytics output**: ``analyze_sales.rep_performance`` returns rep names because the
   question it answers is about reps. This is the only operation allowed to return a PII-tagged
   field, and rep names never enter evidence statements or prompts.
+- **Results that leave the application** (the MCP server) pass through ``mask_withheld_fields``:
+  withheld and PII fields are masked unless the rule above allows them for the operation.
 
 The generator's hidden customer-health process and the injected-event ground truth are not in
 the database at all. They live in the generator and ``data/seeds``, which no agent interface
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 import sqlglot
 from sqlglot import exp
@@ -116,3 +119,35 @@ def default_exposure_policy() -> DataExposurePolicy:
 def names_hidden_state(text: str) -> bool:
     """Whether an identifier names hidden or generated state (always withheld)."""
     return bool(HIDDEN_STATE_PATTERN.search(text))
+
+
+WITHHELD_MARKER = "[WITHHELD]"
+
+
+def mask_withheld_fields(value: Any, exposure: DataExposurePolicy, operation: str = "") -> tuple[Any, int]:
+    """Mask withheld and PII fields in a result that leaves the application (e.g. through MCP).
+
+    Every dict key naming a withheld or PII-tagged column has its value replaced by
+    ``WITHHELD_MARKER``, unless ``PII_ALLOWED_OPERATIONS`` allows that field for ``operation``.
+    Returns the masked copy and the number of masked values. Numbers are never changed.
+    """
+    allowed = PII_ALLOWED_OPERATIONS.get(operation, frozenset())
+    hidden = exposure.all_withheld_columns - allowed
+    count = 0
+
+    def walk(item: Any) -> Any:
+        nonlocal count
+        if isinstance(item, dict):
+            masked: dict[Any, Any] = {}
+            for key, child in item.items():
+                if isinstance(key, str) and key in hidden and child is not None:
+                    masked[key] = WITHHELD_MARKER
+                    count += 1
+                else:
+                    masked[key] = walk(child)
+            return masked
+        if isinstance(item, list):
+            return [walk(child) for child in item]
+        return item
+
+    return walk(value), count

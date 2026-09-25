@@ -160,12 +160,15 @@ def test_os_environ_is_read_only_by_the_redaction_utility() -> None:
     assert sorted(set(readers)) == ["security/redaction.py"]
 
 
-def test_no_phase6_or_later_packages() -> None:
-    for name in ("mcp", "mcp_server", "api", "ui", "evaluation", "benchmark", "server", "web"):
+def test_no_phase7_or_later_packages() -> None:
+    # Phase 6 added app/mcp; the MCP SDK may be imported there and nowhere else.
+    for name in ("mcp_server", "api", "ui", "evaluation", "benchmark", "server", "web"):
         assert not (APP / name).exists(), name
     for path in ALL_SOURCES:
         roots = {m.split(".")[0] for m in _imports(_tree(path))}
-        assert not roots & {"mcp", "fastapi", "starlette", "uvicorn", "streamlit", "flask"}, path
+        assert not roots & {"fastapi", "starlette", "uvicorn", "streamlit", "flask"}, path
+        if "mcp" in roots:
+            assert path.relative_to(APP).parts[0] == "mcp", path
 
 
 def test_limits_are_not_hard_coded_in_the_graph() -> None:

@@ -115,5 +115,6 @@ def test_dependencies_add_only_langgraph_and_an_optional_provider() -> None:
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     names = {re.split(r"[<>=\[ ]", d)[0].lower() for d in project["dependencies"]}
     assert "langgraph" in names
-    assert not names & {"anthropic", "openai", "langchain", "langchain-community", "fastapi", "streamlit", "mcp"}
+    # "mcp" is the Phase 6 dependency; it stays out of the Phase 4 packages (import check above).
+    assert not names & {"anthropic", "openai", "langchain", "langchain-community", "fastapi", "streamlit"}
     assert project["optional-dependencies"]["anthropic"] == ["anthropic>=1.0"]

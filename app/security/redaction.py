@@ -88,17 +88,26 @@ def contains_secret(text: str) -> bool:
     return redact(text) != text
 
 
-def redact(text: str) -> str:
-    """Replace secrets in ``text`` with ``[REDACTED]``."""
-    if not text:
-        return text
+def _secret_literals() -> list[str]:
+    """Registered and environment secrets, longest first (so a secret containing another is removed whole)."""
+    return sorted({*_registered, *_environment_secrets()}, key=len, reverse=True)
+
+
+def _redact_with(text: str, literals: list[str]) -> str:
     result = text
-    for literal in sorted({*_registered, *_environment_secrets()}, key=len, reverse=True):
+    for literal in literals:
         if literal in result:
             result = result.replace(literal, REDACTED)
     for pattern in _KEY_PATTERNS:
         result = pattern.sub(REDACTED, result)
     return _ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", result)
+
+
+def redact(text: str) -> str:
+    """Replace secrets in ``text`` with ``[REDACTED]``."""
+    if not text:
+        return text
+    return _redact_with(text, _secret_literals())
 
 
 def redact_paths(text: str) -> str:
@@ -107,11 +116,19 @@ def redact_paths(text: str) -> str:
 
 
 def redact_value(value: Any) -> Any:
-    """Redact secrets in every string nested in ``value`` (dicts, lists, tuples)."""
+    """Redact secrets in every string nested in ``value`` (dicts, lists, tuples).
+
+    The secret literals are resolved once per call, not once per string, so large structured
+    results (MCP responses) are redacted in time proportional to their size.
+    """
+    return _redact_nested(value, _secret_literals())
+
+
+def _redact_nested(value: Any, literals: list[str]) -> Any:
     if isinstance(value, str):
-        return redact(value)
+        return _redact_with(value, literals) if value else value
     if isinstance(value, dict):
-        return {k: redact_value(v) for k, v in value.items()}
+        return {k: _redact_nested(v, literals) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return type(value)(redact_value(v) for v in value)
+        return type(value)(_redact_nested(v, literals) for v in value)
     return value
