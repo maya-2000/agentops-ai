@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -12,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.config import AgentConfig
 from app.agent.graph import AgentRuntime, build_graph
+from app.agent.observability import new_run_id
 from app.agent.records import AgentError, AgentStatus, InvestigationPlan, LLMCallRecord, ToolCallRecord
 from app.agent.request import ValidatedRequest
 from app.agent.response import LIMIT_MESSAGE, AgentResponse, failure_response
@@ -80,7 +80,7 @@ class AgentRunner:
 
     def run(self, question: Any) -> AgentRunResult:
         """Answer one question. The question is untrusted: it is redacted before it enters the state."""
-        run_id = f"R-{uuid.uuid4().hex[:12]}"
+        run_id = new_run_id()
         clock = time.perf_counter()
         is_text = isinstance(question, str)
         text = question if isinstance(question, str) else ""
