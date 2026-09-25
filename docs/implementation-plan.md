@@ -792,3 +792,43 @@ No Phase 6 code reads the injected-event ground truth, the generator or hidden c
 No Phase 7 evaluation framework, Phase 8 API/UI, authentication, networked transport or
 production deployment functionality was implemented.
 
+
+### Phase 7 (agent evaluation and benchmarking) — complete
+
+`evals/` is an evaluation harness outside the application. It runs the real production paths
+(the LangGraph agent, the agent's `SecuredToolExecutor`, the MCP server over the protocol) and
+grades their structured behaviour against independent references. Phase 7 changed no
+production code. Details: [`docs/evaluation.md`](evaluation.md).
+
+| Module | Responsibility |
+|---|---|
+| `scenarios/`, `datasets/eval_v1.json` | Typed `EvaluationScenario` (strict, frozen), versioned dataset (89 scenarios), loader and selection |
+| `reference/` | `EvalContext` (production handle vs evaluation-only knowledge); KPI references and tolerances; hidden labels mapped to observable manifestations; run-time resolution of reference checks |
+| `runners/` | Agent runner with a recording model proxy; direct and MCP tool runners; the shared-execution probe; evidence-integrity mutations |
+| `graders/` | Agent grader (intent, parameters, tools, grounding, references, claims, hallucination, causality, uncertainty, refusal, security, exposure, efficiency); MCP, parity, discovery, shared-execution and integrity graders; leak detection; optional LLM judge |
+| `metrics/`, `reports/` | Aggregation, latency statistics, regression thresholds; `EvaluationResult`, `EvaluationRunSummary`, JSON and Markdown reports |
+| `engine.py`, `benchmark.py`, `run.py` | Run and grade scenarios; summarise and record reproducibility data; `python -m evals.run` |
+
+Changes outside `evals/`: `.gitignore` (`reports/evaluation/`, `.eval_cache/`), a per-file line
+length exemption for the report writer in `pyproject.toml`, `tests/evals/` and
+`tests/phase7_support.py`, and the documentation.
+
+| Topic | Plan (§15, §16, §18) | Implemented | Reason |
+|---|---|---|---|
+| Location | `app/evaluation/`, `scripts/run_evaluation.py` | top-level `evals/`, `python -m evals.run` | Production must not import or ship the evaluation; a static test enforces the boundary |
+| Benchmark format | `cases.yaml`, ≥ 60 cases | `eval_v1.json`, 89 typed scenarios (Pydantic-validated) | Versioned, validated JSON; no YAML dependency |
+| Expected results | reference SQL keys | named reference checks resolved from the Phase 2/3 independent references at run time | Reuses the validated references; no second reference implementation |
+| Events | expected by event ID | observable manifestations, confirmed against the data; naming an event is a hallucination | Ground truth never reaches production, and discovery is rewarded, not recall of labels |
+| Metrics | A-G + intent, refusal, security, latency | 15 score dimensions, 18 failure categories, security, exposure, MCP parity, integrity, efficiency, resource and latency metrics | Phase 7 brief |
+| Execution | the agent | the agent, the direct secured executor, MCP over the protocol, and a probe proving both entry points share `app/security/execution.py` | Phase 7 brief: evaluate the real paths, no evaluation pipeline |
+| LLM judge | not planned | optional, off by default, never primary, never the answer model | Phase 7 brief |
+| Tests | `tests/evaluation/` | `tests/evals/` (112 tests) | `tests/evals` mirrors the package name |
+
+Exit criterion (§18: "Full evaluation executed; report generated from actual run"): met. The
+full eval_v1 benchmark ran in deterministic mode and produced the JSON and Markdown reports.
+82 of 89 scenarios passed, all regression thresholds passed, 13/13 critical scenarios and 22/22
+multi-seed runs (seeds 7 and 2027) passed. The seven failures are real agent gaps found by the
+benchmark (see `docs/evaluation.md` §16); none were hidden or excluded.
+
+No production code reads the injected-event ground truth; only `evals/reference/` does. No
+Phase 8 API/UI or Phase 9 production deployment functionality was implemented.
