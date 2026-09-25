@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
 
 from app.analytics.kpis import KPIService
 from app.database.base import Database
+from app.tools.sql_safety import SQLComplexityLimits
 
 SourceLayer = Literal[
     "phase2_kpi",
@@ -41,6 +42,8 @@ class ToolContext:
     db: Database
     as_of: date
     sql_row_limit: int
+    sql_timeout_seconds: float | None = None  # statement timeout for run_safe_sql
+    sql_limits: SQLComplexityLimits = field(default_factory=SQLComplexityLimits)
     kpi_service: KPIService = field(init=False)
 
     def __post_init__(self) -> None:
