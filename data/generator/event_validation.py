@@ -10,6 +10,7 @@ sees), using thresholds wide enough to tolerate realistic noise.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -30,6 +31,11 @@ class EventCheck:
     status: Status
     details: str
     metrics: dict[str, Any] = field(default_factory=dict)
+
+
+def _binomial_upper_tail(k: int, n: int, p: float) -> float:
+    """Exact one-sided P(X >= k) for X ~ Binomial(n, p)."""
+    return float(min(1.0, sum(math.comb(n, i) * p**i * (1 - p) ** (n - i) for i in range(k, n + 1))))
 
 
 def _month(d: date, offset: int = 0) -> date:
@@ -79,27 +85,34 @@ class _EventValidator:
             self.skip("E1", "previous month not in window")
             return
 
-        churn_by_month = dict(
-            self.rows("""
+        # Month-start base (previous month-end snapshot) and churners per month for SG Enterprise.
+        counts = {
+            month: (int(n), int(k))
+            for month, n, k in self.rows("""
             WITH base AS (SELECT month, COUNT(*) AS n FROM v_monthly_mrr
                           WHERE country = 'Singapore' AND segment = 'Enterprise' GROUP BY 1),
                  churned AS (SELECT CAST(date_trunc('month', s.end_date) AS DATE) AS month, COUNT(*) AS k
                              FROM subscriptions s JOIN customers c USING (customer_id)
                              WHERE s.status = 'churned' AND c.country = 'Singapore'
                                AND c.segment = 'Enterprise' GROUP BY 1)
-            SELECT CAST(b.month + INTERVAL 1 MONTH AS DATE), COALESCE(k, 0)::DOUBLE / n FROM base b
+            SELECT CAST(b.month + INTERVAL 1 MONTH AS DATE), n, COALESCE(k, 0) FROM base b
             LEFT JOIN churned ch ON ch.month = b.month + INTERVAL 1 MONTH""")
-        )
-        event_rate = churn_by_month.get(aug, 0.0)
-        prior = [v for m, v in churn_by_month.items() if _month(aug, -12) <= m < aug]
-        baseline = sum(prior) / len(prior) if prior else 0.0
+        }
+        n_event, k_event = counts.get(aug, (0, 0))
+        prior = [v for m, v in counts.items() if _month(aug, -12) <= m < aug]
+        # Pooled trailing-12-month baseline with add-one smoothing (never exactly zero).
+        baseline = (sum(k for _, k in prior) + 1) / (sum(n for n, _ in prior) + 2)
+        event_rate = k_event / n_event if n_event else 0.0
+        p_value = _binomial_upper_tail(k_event, n_event, baseline)
         self.add(
             "E1",
             "sg_enterprise_churn_rate_spike",
-            event_rate >= max(4 * baseline, 0.08),
-            f"Aug churn {event_rate:.1%} vs trailing average {baseline:.2%}",
+            event_rate >= 5 * baseline and p_value < 0.001,
+            f"Aug churn {k_event}/{n_event} = {event_rate:.1%} vs trailing 12-month baseline {baseline:.2%} "
+            f"({event_rate / baseline:.0f}x; one-sided binomial p = {p_value:.1e})",
             event_rate=event_rate,
             baseline=baseline,
+            p_value=p_value,
         )
 
         def mrr_delta(dimension: str, where: str = "") -> list[tuple[str, float]]:
@@ -122,14 +135,17 @@ class _EventValidator:
             f"{countries[1][0]} ({countries[1][1]:,.0f})",
             ranking=countries[:3],
         )
-        segments = mrr_delta("segment")
+        # At company level other segments' growth can mask the event, so the concentration is
+        # checked where an analyst would find it: the country x segment breakdown.
+        cells = mrr_delta("country || ' / ' || segment")
         sg_segments = mrr_delta("segment", "AND country = 'Singapore'")
         self.add(
             "E1",
-            "enterprise_largest_segment_decline",
-            segments[0][0] == "Enterprise" and sg_segments[0][0] == "Enterprise",
-            f"overall: {segments[0][0]} ({segments[0][1]:,.0f}); within Singapore: {sg_segments[0][0]}",
-            overall=segments,
+            "singapore_enterprise_largest_cell_decline",
+            cells[0][0] == "Singapore / Enterprise" and sg_segments[0][0] == "Enterprise",
+            f"most negative country/segment cell: {cells[0][0]} ({cells[0][1]:,.0f}); next: "
+            f"{cells[1][0]} ({cells[1][1]:,.0f}); within Singapore: {sg_segments[0][0]}",
+            cells=cells[:3],
             singapore=sg_segments,
         )
 

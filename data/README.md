@@ -133,10 +133,10 @@ change customer, campaign or rep behaviour), so they surface only as observable 
 
 | ID | Event | Mechanism (generator-side) | Observable signal |
 |---|---|---|---|
-| E1 | Singapore Enterprise churn wave, August 2026 | 20% of Singapore Enterprise accounts churn (last service day 1–12 Aug), 30% contract. Mild spill-over to Singapore Mid-Market. Billing complaints in July–August | Revenue and MRR decline in August. Singapore and Enterprise are the largest negative contributors |
+| E1 | Singapore Enterprise churn wave, August 2026 | 9% of Singapore Enterprise accounts churn (last service day 1–12 Aug), 30% contract. Mild spill-over to Singapore Mid-Market. Billing complaints in July–August | Revenue −0.97% and MRR −0.76% in August. Singapore is the largest negative country (−84.9k MRR) and Singapore × Enterprise the largest negative country/segment cell (−67.0k, −14% of the cell) |
 | E2 | Support-ticket spike, 8 Jun – 24 Jul 2026 | Bug ×2.6, Integration ×2.0 and Performance ×1.4 ticket rates, resolution times ×1.7, engagement shock for affected accounts | Tickets per active customer-month +33% (Jun–Jul vs Mar–May), Bug/Integration share 25% → 37%, median resolution 28h → 42h |
 | E3 | Inefficient Paid Social campaign (Q2 2026) | Spend ×1.6 with lead quality ×0.38 | Highest CAC of any campaign with ≥ 10 conversions: 3.1× the Paid Social median (2.2–2.8× on other seeds) |
-| E4 | Sales rep with consistently low conversion | Every funnel transition ×0.85 for one rep | Lowest win rate: 8.9% vs a 20.1% team median |
+| E4 | Sales rep with consistently low conversion | Every funnel transition ×0.85 for one rep | Lowest win rate: 9.9% vs a 19.3% team median |
 | E5 | AI Insights launch, 2 March 2026 | Monthly adoption hazard for eligible plans; adopters gain engagement | Feature rows start on the launch date; adoption rises steadily |
 | E6 | Structurally higher SMB churn | Segment churn intercepts | SMB has the highest monthly logo churn |
 | E7 | Usage decline before churn | 3% of established accounts disengage from April 2026, with extra churn risk in July–August | Weekly active users fall before churn; tickets rise for the same accounts |
@@ -154,13 +154,18 @@ Separation from the agent:
 ### Calibration
 
 Events are tuned to be detectable but not trivial.
-- **E1 is not a collapse.** August revenue falls 1.8% month on month (1.4–2.3% on other seeds),
-  and company-wide logo churn barely moves: 20 of about 3,500 accounts. The concentration
-  appears only after breaking the change down by country and segment. Within that one cell
-  the signal is strong: Singapore Enterprise churn is 19.8% in August against a 0.19% monthly
-  baseline.
-- **Robustness across seeds.** All event checks were confirmed to pass with seeds 7, 99, 123,
-  2024 and 42 at full scale.
+- **E1 is detectable but not extreme.** Singapore Enterprise churn in August is 9 of 101
+  accounts (8.9%) against a trailing 12-month baseline of 0.19% per month. That is highly
+  significant (one-sided exact binomial p ≈ 2e-11) but plausible for a renewal-driven churn
+  wave in one market. At company level the effect is modest: revenue −0.97% and MRR −0.76%
+  month on month (−0.6% to −1.7% on other seeds), and logo churn barely moves. Other segments'
+  growth can mask it in a segment-only view, so the concentration shows up in the
+  country × segment breakdown.
+  *History:* the first Phase 1 build used a 20% churn share (19.8% observed). It was reduced
+  to 9% because that level was unrealistically extreme.
+- **Robustness across seeds.** All 19 event checks and 184 quality checks pass with seeds 42,
+  7, 99, 123 and 2024 at full scale. E1 churn ranges from 8.5% to 9.5%, and Singapore ×
+  Enterprise is the most negative cell on every seed.
 - **Emergent trap.** Churned customers raise more tickets per month *within every segment*.
   Pooled across segments the comparison reverses, because churners are mostly small SMB
   accounts (Simpson's paradox). The agent should segment before concluding.

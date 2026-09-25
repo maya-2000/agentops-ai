@@ -506,3 +506,14 @@ refinements; each is recorded here so the plan and the code agree:
 Lineage foundation: `app/database/lineage.py` (`DatasetInfo`, `LineageRecord`, query and
 tool-run IDs, sqlglot-based source-table extraction). Every `Database.query()` result carries
 a `LineageRecord`.
+
+**E1 recalibration (after Phase 1 review).** The Singapore Enterprise churn share was reduced
+from 20% to 9% of affected accounts (observed 8.9% at seed 42, 8.5-9.5% across seeds) because
+the first calibration was unrealistically extreme. The other six events keep their parameters.
+Because the random stream after E1 changes, their measured values shifted slightly (for
+example, E4 win rate 9.9% vs a 19.3% median). Two E1 checks were revised to match the
+subtler event:
+- The rate check now requires at least 5x the pooled trailing baseline and a one-sided exact
+  binomial p < 0.001, replacing a fixed 8% floor.
+- The concentration check now uses the country x segment breakdown instead of a
+  company-wide segment ranking, where growth elsewhere can mask the event.

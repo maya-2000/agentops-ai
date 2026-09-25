@@ -105,3 +105,14 @@ class TestCampaignPlan:
     def test_no_e3_outside_window(self) -> None:
         plans = plan_campaigns(Timeline(date(2024, 9, 1), date(2025, 8, 31)))
         assert not any(p.is_e3 for p in plans)
+
+
+class TestEventStatistics:
+    def test_binomial_upper_tail_exact_values(self) -> None:
+        from data.generator.event_validation import _binomial_upper_tail
+
+        assert _binomial_upper_tail(5, 10, 0.5) == pytest.approx(0.623046875)
+        assert _binomial_upper_tail(0, 10, 0.3) == pytest.approx(1.0)
+        assert _binomial_upper_tail(10, 10, 0.5) == pytest.approx(0.5**10)
+        # A 9-in-101 monthly churn count is extremely unlikely under a 0.2% baseline.
+        assert _binomial_upper_tail(9, 101, 0.002) < 1e-10
