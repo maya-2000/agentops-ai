@@ -24,7 +24,13 @@ dependencies = [
     "statsmodels>=0.15,<0.16",
     # Phase 4: the agent's state machine. langchain-core comes in transitively; no other LangChain packages are used.
     "langgraph>=1.2,<2",
+    # Phase 6: the official Model Context Protocol SDK (low-level server, stdio transport, client for tests).
+    "mcp>=2.2,<3",
 ]
+
+[project.scripts]
+# Phase 6: the local MCP server (stdio). Equivalent to `python -m app.mcp`.
+agentops-mcp = "app.mcp.__main__:main"
 
 [project.optional-dependencies]
 # Phase 4: optional network LLM provider (LLM_PROVIDER=anthropic). The default deterministic provider needs nothing.

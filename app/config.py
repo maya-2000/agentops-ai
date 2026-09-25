@@ -13,6 +13,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 LLMProviderName = Literal["deterministic", "offline", "anthropic"]
+MCPTransport = Literal["stdio"]
+MCPLogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 DEFAULT_LLM_MODEL = "claude-opus-5"
 
 
@@ -57,6 +59,17 @@ class Settings(BaseSettings):
     agent_tool_timeout_seconds: float = Field(default=30.0, gt=0)
     agent_sql_timeout_seconds: float = Field(default=10.0, gt=0)
     agent_disabled_tools: str = ""  # comma-separated tool names switched off for the agent
+
+    # ---- Phase 6: MCP server (local stdio transport; see docs/mcp-architecture.md) ----
+    # The MCP server uses the agent limits above; these settings only add what is MCP-specific.
+    mcp_server_name: str = Field(default="agentops-ai", pattern=r"^[a-z][a-z0-9_.-]{0,63}$")
+    mcp_server_version: str = Field(default="0.6.0", pattern=r"^\d+\.\d+\.\d+$")
+    mcp_enabled_tools: str = ""  # comma-separated agentops_* tool names; empty means all twelve
+    mcp_transport: MCPTransport = "stdio"
+    mcp_log_level: MCPLogLevel = "WARNING"
+    mcp_max_request_bytes: int = Field(default=16384, ge=1024, le=1_048_576)
+    mcp_max_response_bytes: int = Field(default=262144, ge=16384, le=8_388_608)
+    mcp_sql_enabled: bool = True  # False unlists agentops_run_safe_sql and revokes the SQL privilege
 
     @field_validator("llm_model", mode="before")
     @classmethod

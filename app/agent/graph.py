@@ -45,7 +45,6 @@ functions and never enters the state.
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -67,7 +66,6 @@ from app.analytics.errors import InvalidRequestError
 from app.analytics.executor import QueryRunner
 from app.analytics.kpis import list_kpi_definitions
 from app.database.base import Database
-from app.database.deadline import execution_deadline
 from app.evidence.builder import build_evidence, evidence_summary
 from app.evidence.models import EvidenceGraph
 from app.evidence.validation import ResponseValidationResult, validate_evidence, validate_response
@@ -94,7 +92,6 @@ from app.security.authorization import (
 from app.security.budget import (
     RunBudget,
     charge_model_call,
-    charge_tool_call,
     mark_exhausted,
     remaining_tool_calls,
 )
@@ -102,15 +99,16 @@ from app.security.context import ContextTooLargeError, fit_context, prioritised_
 from app.security.data_policy import default_exposure_policy
 from app.security.errors import safe_message, sanitize_detail
 from app.security.events import SecurityEvent, SecurityEventType, Severity, security_event
+from app.security.execution import SecuredToolExecutor
+from app.security.execution import denial_event as shared_denial_event
 from app.security.input_guard import InputGuard, understanding_output_problems
 from app.security.output_guard import ToolOutputValidator, shrink_draft
 from app.security.plan_validator import PlanValidation, PlanValidator
 from app.security.retry import RetryPolicy, RetryRecord
 from app.security.timeouts import CallTimeoutError, call_with_timeout
 from app.timeseries.metrics import SERIES_METRIC_KEYS
-from app.tools.base import ToolContext, ToolError, ToolRequest, ToolResult
+from app.tools.base import ToolContext, ToolError, ToolResult
 from app.tools.registry import ToolRegistry
-from app.tools.results import SQLResult
 
 NODES = (
     "question_received",
@@ -147,16 +145,6 @@ TRIMMABLE_CONTEXT: dict[LLMTask, tuple[str, ...]] = {
     LLMTask.PLAN: ("evidence", "executed_steps"),
     LLMTask.RESPOND: ("evidence", "claims"),
 }
-_DENIAL_EVENTS: dict[str, SecurityEventType] = {
-    "unsafe_sql": "sql_rejected",
-    "budget_exceeded": "budget_exceeded",
-    "unknown_tool": "tool_denied",
-    "tool_disabled": "tool_denied",
-    "tool_not_permitted": "tool_denied",
-    "sql_not_permitted": "tool_denied",
-    "prerequisite_missing": "tool_denied",
-}
-
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
@@ -228,6 +216,14 @@ class AgentRuntime:
             sql_row_limit=config.sql_row_limit,
             sql_timeout_seconds=config.sql_timeout_seconds,
             sql_limits=self.authorization.sql_limits,
+        )
+        self.executor = SecuredToolExecutor(
+            registry,
+            self.authorization,
+            self.output_validator,
+            self.retry_policy,
+            self.tool_context,
+            tool_timeout_seconds=config.tool_timeout_seconds,
         )
         self._business_context: dict[str, Any] | None = None
 
@@ -438,17 +434,7 @@ def build_graph(runtime: AgentRuntime) -> Any:
         )
 
     def denial_event(state: AgentState, decision: AuthorizationDecision, component: str) -> SecurityEvent:
-        event_type = _DENIAL_EVENTS.get(decision.code or "", "argument_rejected")
-        return event(
-            state,
-            event_type,
-            decision.severity,
-            component=component,
-            action=decision.tool_name,
-            decision="deny",
-            reason=f"{decision.code}: {decision.reason}",
-            code=decision.code,
-        )
+        return shared_denial_event(state.run_id, decision, component)
 
     # ------------------------------------------------------------------ main path
     def question_received(state: AgentState) -> dict[str, Any]:
@@ -831,116 +817,21 @@ def build_graph(runtime: AgentRuntime) -> Any:
             return go(state, "execute_tools", "collect_evidence")
         step = pending.pop(0)
         call_id = f"T{len(state.tool_calls) + 1}"
-        is_sql = step.tool_name == SQL_TOOL
-        decision = runtime.authorization.authorize(
-            step.tool_name,
-            step.arguments,
+        call = runtime.executor.execute(
+            run_id=state.run_id,
+            call_id=call_id,
+            tool_name=step.tool_name,
+            arguments=step.arguments,
+            purpose=step.purpose,
             context=auth_context(state, step.iteration),
             budget=runtime.run_budget,
             usage=usage,
         )
-        retries: list[RetryRecord] = []
-        attempts = 0
-        if not decision.allowed:
-            events.append(denial_event(state, decision, "tool_authorization"))
-            now = datetime.now(UTC)
-            result = ToolResult(
-                call_id=call_id,
-                tool_name=step.tool_name,
-                arguments=step.arguments,
-                success=False,
-                status="error",
-                error=ToolError(code=decision.code or "unauthorized_tool", message=decision.reason, retryable=False),
-                message=decision.reason,
-                started_at=now,
-                finished_at=now,
-                execution_time_ms=0.0,
-            )
-            if decision.code == "budget_exceeded":
-                usage = mark_exhausted(usage, "tool_budget")
-                pending = []  # stop: no further step can be charged either
-        else:
-            events.append(
-                event(
-                    state,
-                    "tool_authorized",
-                    Severity.INFO,
-                    component="tool_authorization",
-                    action=step.tool_name,
-                    decision="allow",
-                    reason="All authorization checks passed.",
-                    checks=decision.checks_passed,
-                )
-            )
-            arguments = decision.arguments or step.arguments
-            while True:
-                attempts += 1
-                clock = time.perf_counter()
-                with execution_deadline(cfg.tool_timeout_seconds):
-                    result = runtime.registry.execute(
-                        ToolRequest(
-                            call_id=call_id, tool_name=step.tool_name, arguments=arguments, purpose=step.purpose
-                        ),
-                        runtime.tool_context,
-                    )
-                took = time.perf_counter() - clock
-                if result.success and took > cfg.tool_timeout_seconds:
-                    result = _failed(result, "timeout", f"The tool exceeded its {cfg.tool_timeout_seconds:g}s limit.")
-                code = result.error.code if result.error else None
-                if code == "timeout":
-                    events.append(
-                        event(
-                            state,
-                            "timeout",
-                            Severity.WARNING,
-                            component="tool_execution",
-                            action=step.tool_name,
-                            decision="stop",
-                            reason="The tool call exceeded its time limit; no result was used.",
-                        )
-                    )
-                if result.success:
-                    break
-                retry = runtime.retry_policy.should_retry(code, attempts)
-                retries.append(
-                    RetryRecord(
-                        stage=f"execute_tools:{step.tool_name}",
-                        attempt=attempts,
-                        code=code or "unknown",
-                        decision="retry" if retry else "stop",
-                    )
-                )
-                if not retry:
-                    break
-                events.append(
-                    event(
-                        state,
-                        "retry",
-                        Severity.WARNING,
-                        component="tool_execution",
-                        action=step.tool_name,
-                        decision="retry",
-                        reason=f"Transient failure ({code}); attempt {attempts + 1}.",
-                    )
-                )
-            violations = runtime.output_validator.validate(result)
-            if violations:
-                events.append(
-                    event(
-                        state,
-                        "tool_output_rejected",
-                        Severity.HIGH,
-                        component="output_guard",
-                        action=step.tool_name,
-                        decision="deny",
-                        reason="; ".join(f"{v.field}: {v.message}" for v in violations[:3]),
-                    )
-                )
-                data_policy = any(v.code == "data_policy" for v in violations)
-                result = _failed(result, "data_policy" if data_policy else "invalid_tool_output", violations[0].message)
-            sql_rows = result.result.row_count if isinstance(result.result, SQLResult) else 0
-            usage = charge_tool_call(usage, sql=is_sql, sql_rows=sql_rows, retries=max(0, attempts - 1))
-        result = result.model_copy(update={"attempts": max(attempts, 1)})
+        result, decision, usage = call.result, call.decision, call.usage
+        attempts = max(call.attempts, 1)
+        events.extend(call.events)
+        if decision.code == "budget_exceeded":
+            pending = []  # stop: no further step can be charged either
         safe_error = (
             ToolError(
                 code=result.error.code,
@@ -960,7 +851,7 @@ def build_graph(runtime: AgentRuntime) -> Any:
             execution_time_ms=result.execution_time_ms,
             success=result.success,
             status=result.status,
-            attempts=max(attempts, 1),
+            attempts=attempts,
             result_summary=_summary(result),
             query_ids=result.query_ids,
             error=safe_error,
@@ -972,7 +863,7 @@ def build_graph(runtime: AgentRuntime) -> Any:
             call_id=call_id,
             success=result.success,
             status=result.status,
-            attempts=max(attempts, 1),
+            attempts=attempts,
             error_code=result.error.code if result.error else None,
             execution_time_ms=result.execution_time_ms,
             query_ids=result.query_ids,
@@ -988,10 +879,10 @@ def build_graph(runtime: AgentRuntime) -> Any:
             tool_calls=calls,
             tool_results=[*state.tool_results, result],
             current_step=state.current_step + 1,
-            tool_retries=state.tool_retries + max(attempts, 1) - 1,
+            tool_retries=state.tool_retries + attempts - 1,
             limit_reached=state.limit_reached or limit or (decision.code == "budget_exceeded"),
             budget_usage=usage,
-            retries=[*state.retries, *retries],
+            retries=[*state.retries, *call.retries],
             security_events=[*state.security_events, *events],
         )
 
@@ -1319,22 +1210,6 @@ def build_graph(runtime: AgentRuntime) -> Any:
     for name in FAILURE_NODES:
         graph.add_edge(name, END)
     return graph.compile()
-
-
-def _failed(result: ToolResult, code: str, message: str) -> ToolResult:
-    """Turn a result into a controlled failure: the output is discarded, never partially used."""
-    return result.model_copy(
-        update={
-            "success": False,
-            "status": "error",
-            "result": None,
-            "result_type": None,
-            "error": ToolError(code=code, message=message, retryable=False),
-            "message": message,
-            "query_ids": [],
-            "source_tables": [],
-        }
-    )
 
 
 def _response_chars(response: Any) -> int:

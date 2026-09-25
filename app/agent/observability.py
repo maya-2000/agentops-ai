@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 
 from app.security.redaction import redact_value
@@ -43,6 +44,11 @@ _ALLOWED_KEYS = {
     "severity",
     "decision",
 }
+
+
+def new_run_id() -> str:
+    """A run ID: the correlation key of one agent run or one MCP tool call in every log and audit event."""
+    return f"R-{uuid.uuid4().hex[:12]}"
 
 
 def log_event(run_id: str, event: str, **fields: Any) -> None:
