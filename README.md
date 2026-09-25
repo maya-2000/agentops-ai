@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 2 of 9 complete.**
+> **Status: Phase 3 of 9 complete.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
@@ -14,7 +14,7 @@ observed facts separate from inference and says when the evidence is insufficien
 | 0 | Implementation plan | ✅ |
 | 1 | Synthetic data generator, DuckDB schema, data dictionary, manifest, lineage foundation, validation | ✅ |
 | 2 | KPI framework and analytics engine (20 KPIs, 8 analytics modules, independent validation) | ✅ |
-| 3 | Forecasting and anomaly detection | ⏳ |
+| 3 | Forecasting and anomaly detection | ✅ |
 | 4 | LangGraph agent, tools, evidence layer | ⏳ |
 | 5 | Guardrails and security | ⏳ |
 | 6 | MCP server | ⏳ |
@@ -68,6 +68,34 @@ get_kpi_definition("cac").limitations
 
 Details: [`docs/analytics.md`](docs/analytics.md) · KPI catalog: [`docs/kpi-catalog.md`](docs/kpi-catalog.md)
 
+## Forecasting and anomaly detection
+
+Deterministic monthly forecasting and anomaly detection for revenue, MRR, active customers,
+support tickets and product adoption. Every series is built from the Phase 2 KPIs. Everything
+uses **only information available at the cutoff** (business as-of date 2026-08-31).
+
+- **Forecasting:** naive, seasonal-naive, moving-average and drift baselines, plus damped-trend
+  exponential smoothing (ETS). Models are compared with rolling-origin backtests and must beat the
+  naive baseline to be selected. Forecasts carry 95% prediction intervals whose historical
+  coverage is reported.
+- **Anomaly detection:** rolling z-score, robust IQR (Tukey fences) and forecast-residual
+  detectors. Each month is judged only against the months before it, with documented severity
+  thresholds, statistical direction and no causal claims.
+- **Evidence:** every result carries its SQL, backtest folds, fitted parameters, thresholds and
+  limitations. Leakage tests alter the future and confirm that nothing at the cutoff changes.
+
+```python
+from app.database import get_database
+from app.forecasting import forecast_metric
+from app.anomalies import detect_anomalies
+
+db = get_database()
+forecast_metric(db, "mrr", horizon=3)                              # ForecastResult with intervals + backtests
+detect_anomalies(db, "support_ticket_volume", detector="iqr")      # AnomalyReport, ranked by |score|
+```
+
+Details: [`docs/forecasting.md`](docs/forecasting.md) · [`docs/anomaly-detection.md`](docs/anomaly-detection.md)
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -79,7 +107,7 @@ pip install -e ".[dev]"
 cp .env.example .env              # optional; defaults work without it
 
 python -m data.generator.generate # build database/northwind_cloud.duckdb (~30 s)
-pytest                            # full test suite (~65 s; builds its own datasets)
+pytest                            # full test suite (~100 s; builds its own datasets)
 ```
 
 The test suite needs no API key, LLM, network access or pre-built database.
@@ -93,12 +121,16 @@ app/
                          read-only DuckDB backend, lineage models, data-dictionary renderer
   analytics/             KPI registry + calculation engine (kpis/), periods, dimension allow-list,
                          revenue / customers / cohorts / risk / sales / marketing / support / product
+  timeseries/            monthly series from the KPIs (missing-data policy, cutoff-bounded queries)
+  forecasting/           baselines + ETS, rolling-origin backtests, model selection, ForecastService
+  anomalies/             rolling z-score, IQR and forecast-residual detectors, AnomalyService
 data/
   generator/             reproducible synthetic-data pipeline (CLI: python -m data.generator.generate)
   metadata/              dataset manifest, checksums, machine-readable data dictionary
   seeds/                 injected-event ground truth (evaluation only; never exposed to the agent)
 database/                DuckDB file (generated, git-ignored)
-docs/                    implementation plan, data dictionary, analytics guide, KPI catalog
+docs/                    implementation plan, data dictionary, analytics guide, KPI catalog,
+                         forecasting and anomaly-detection guides
 tests/                   unit and integration tests
 ```
 

@@ -542,3 +542,37 @@ Validation: 287 Phase 2 tests. All 20 KPIs match an independent pandas reference
 four periods and several filters; reconciliation, identity, invariant, edge-case, isolation and
 performance tests; and a time-based backtest of the risk bands. Injected-event ground truth is
 not used by any analytics code or test.
+
+### Phase 3 (forecasting and anomaly detection) — complete
+
+Architecture and principles from Phase 0 are unchanged. Phase 3 adds three library packages that
+sit on top of Phase 2 and know nothing about agents, LLMs, prompts, MCP, HTTP or UIs:
+
+- `app/timeseries/`: the only Phase 3 database access, through `KPIService` and `mrr_series`.
+- `app/forecasting/`: models, rolling-origin backtests, selection and `ForecastService`.
+- `app/anomalies/`: detectors, the severity policy and `AnomalyService`.
+
+Details: [forecasting.md](forecasting.md) and [anomaly-detection.md](anomaly-detection.md).
+
+| Topic | Plan (§7.2, §7.3) | Implemented | Reason |
+|---|---|---|---|
+| Package layout | `app/forecasting/`, `app/anomaly/` | `app/timeseries/` (shared series preparation), `app/forecasting/`, `app/anomalies/` | One series layer feeds both, so forecasting and detection use identical numbers; plural name as in the Phase 3 brief |
+| Forecast targets | MRR, revenue, customer count | + support ticket volume and product adoption (one feature per request) | Phase 3 brief; every target is an existing KPI |
+| Models | naive, seasonal naive, SES/moving average, Holt / Holt-Winters, ARIMA | naive, seasonal naive, moving average, drift, ETS(A,Ad,N) damped trend | 24 monthly points: backtest folds have fewer than two seasonal cycles, so Holt-Winters could never be validated. One well-understood statistical model instead of a grid the history cannot discriminate |
+| Backtest | Last 6 months, horizon 1–3 | Expanding window from a 12-month initial window, every origin, horizons 1–6, at least 3 folds | Uses all the history; per-fold records for audit |
+| MAPE | Only when no zero/near-zero actuals | Same rule (near zero = below 1% of the mean absolute actual) plus WAPE | WAPE stays defined with zeros |
+| Selection | Lowest MAE, tie-break RMSE, must beat naive | As planned, plus a nested out-of-sample evaluation of the rule (`evaluate_selection`) | Backtest metrics of the selected model are optimistic; the nested evaluation is not |
+| Intervals | statsmodels where available, else empirical | Analytic (naive, seasonal naive, drift), residual-based (moving average), model-derived (ETS); empirical backtest coverage reported for every model | Measured coverage shows when intervals are too narrow (ETS was, see forecasting.md §13) |
+| Anomaly methods | Per metric: STL residual z-score, proportion tests, cross-sectional IQR, CUSUM change points | Rolling z-score, robust IQR (Tukey) and forecast residual on monthly series, each with level / difference / % change transforms | Phase 3 brief. STL needs at least two cycles inside the window. Proportion tests, cross-sectional campaign outliers and change-point detection are not implemented |
+| Severity | low / medium / high by \|z\| and % | normal / watch / significant / extreme; standardised cut-offs 2/3/4; Tukey fences 1.5/3 for IQR | Statistically interpretable, deterministic, documented per detector |
+| Exit criterion "E1/E2/E3/E5 detected" (§18) | Detection of four events | E1 and E2 detected by all three detectors (checked in a separate evaluation test). E3 is a cross-sectional campaign pattern (Phase 2 campaign analytics), and E5's feature series has 6 months, below the minimum history | Reported honestly rather than tuned to the ground truth |
+| Dependencies | statsmodels | statsmodels 0.15 (ETS) and scipy (t tail probabilities) | statsmodels 0.15 is the release tested with pandas 3; statsmodels needs a pandas index for prediction (worked around in `statistical.py`) |
+| Phase 2 test | — | `test_phase3_modules_not_created` became `test_later_phase_modules_not_created` (agent, llm, api, ui, ...) | It encoded "Phase 3 not started"; Phase 3 now has its own boundary tests (`test_phase3_isolation.py`) |
+
+Leakage prevention: queries are bounded by the cutoff, later cutoffs are rejected, folds use only
+their training slice, and anomaly baselines use only prior months. Regression tests alter the
+future (synthetic series and a copy of the real database) and assert that nothing at the cutoff
+changes. Validation: 373 Phase 3 tests, including an independent reference implementation
+(`tests/reference_timeseries.py`), leakage tests, missing-data and insufficient-history tests,
+integration tests on the generated dataset and latency budgets. No Phase 3 production code reads
+the injected-event ground truth or the hidden customer-health mechanism.
