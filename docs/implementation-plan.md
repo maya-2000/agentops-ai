@@ -330,6 +330,10 @@ Details go in `docs/security.md`.
 
 ## 11. MCP server
 
+> Implemented in Phase 6 with deliberate deviations (package `app/mcp/`, the SDK's low-level
+> server, the twelve `agentops_*` tools); see the Phase 6 notes in §22 and
+> [mcp-architecture.md](mcp-architecture.md).
+
 `mcp/server/server.py` using FastMCP (stdio), exposing `get_schema, get_kpi_definition, query_database, calculate_kpi, detect_anomalies, forecast_metric, generate_chart`, each with typed input/output schemas generated from the same Pydantic models. Sample `mcp/claude_desktop_config.example.json`. Docs (`mcp/README.md`): how MCP works, tool list, I/O schemas, example requests, security considerations. Tests use the MCP SDK's in-memory client session to list tools and call them.
 
 ---
@@ -728,3 +732,63 @@ Performance (A-B-A-B against the Phase 4 head, full dataset, deterministic model
 No Phase 5 code reads the injected-event ground truth, the generator or the hidden
 customer-health mechanism. No MCP, API, UI, benchmark or other Phase 6+ functionality was
 implemented, and no dependency was added.
+
+### Phase 6 (MCP integration) — complete
+
+`app/mcp/` exposes the twelve Phase 4 tools to MCP clients through the official MCP Python SDK
+(`mcp` 2.x, low-level `Server`, stdio transport). It is an adapter only. Every call goes
+through the Phase 5 execution path and the Phase 4 evidence builder; the MCP layer contains no
+analytics, no SQL and no authorization rules of its own.
+
+| Module | Responsibility |
+|---|---|
+| `registry.py` | The single catalogue: `agentops_*` name → Phase 4 definition, intent, output kind, composed description, input schema (the Phase 4 model), output schema, version metadata |
+| `schemas.py` | `MCPToolOutput` (status, result, forecast/anomaly views, evidence, provenance, query ID, warnings, limitations, error, truncation) |
+| `adapters.py` | `MCPToolService.call`: name and size checks, parameter screen, `SecuredToolExecutor`, evidence and its validation, masking, redaction, size bound, audit |
+| `errors.py` | Nine MCP error categories with fixed messages, derived from the Phase 5 categories |
+| `config.py`, `audit.py` | `MCPServerConfig` from `MCP_*` settings (limits from `AGENT_*`); the `agentops.mcp` audit log |
+| `server.py`, `__main__.py` | The low-level server, its lifespan (read-only database via `get_database`), a lock serialising calls, stdio; `python -m app.mcp` / `agentops-mcp` |
+
+Changes outside `app/mcp/`, each small:
+
+- **Shared execution path.** The authorize → deadline → execute → retry → validate output →
+  charge budget sequence moved from `execute_tools` into `app/security/execution.py`
+  (`SecuredToolExecutor`), so the agent and MCP use one implementation. The agent's behaviour
+  is unchanged, and every earlier test passes unmodified.
+- **Data exposure.** `mask_withheld_fields` in `app/security/data_policy.py` applies the existing
+  withheld and PII lists to results that leave the process.
+- **Redaction performance.** `redact_value` resolves secret literals once per call. The
+  semantics are unchanged; measuring MCP overhead showed the per-string environment scan
+  dominating large responses.
+- **Run IDs.** `new_run_id()` is shared by agent runs and MCP calls.
+- **Settings, dependency, entry point.** `MCP_*` settings in `app/config.py` and `.env.example`;
+  `mcp>=2.2,<3` and the `agentops-mcp` script in `pyproject.toml`.
+- **Boundary tests** updated deliberately: `app/mcp` is now allowed, the MCP SDK may be imported
+  only there, and API/UI/evaluation packages remain forbidden. The Phase 4 packages still may
+  not import `mcp`.
+
+| Topic | Plan (§11, §18) | Implemented | Reason |
+|---|---|---|---|
+| Location | Top-level `mcp/server/` (or `mcp_server/`) | `app/mcp/` | A top-level `mcp` package would shadow the SDK; inside `app` it shares configuration and tests |
+| Server API | FastMCP | Low-level `mcp.server.Server` | FastMCP is `MCPServer` in SDK v2 and derives schemas from signatures; the Phase 4 Pydantic models are exposed as they are, with no duplicate schemas |
+| Tools | `get_schema`, `get_kpi_definition`, `query_database`, `calculate_kpi`, `detect_anomalies`, `forecast_metric`, `generate_chart` | The twelve Phase 4 tools as `agentops_*` | The Phase 6 brief; reuse of the tested tools; no chart or schema-dump tools |
+| Security | "Security considerations" in the docs | The full Phase 5 path per call; MCP error model; masking, redaction, size limits; audit with run-ID correlation | Phase 6 brief: MCP must not bypass Phase 5 |
+| Docs | `mcp/README.md`, a sample Claude Desktop config | `docs/mcp-architecture.md` (15 sections, quickstart, client configuration, MCP vs LangGraph) | Phase 6 brief |
+| Tests | In-memory client lists and calls tools | 302 tests: lifecycle, discovery regression, schemas, all tools vs direct execution, errors, twelve attack types, audit, in-process and stdio smoke, two end-to-end workflows, static isolation | Phase 6 brief |
+
+Exit criterion (§18: "Tools listed and callable via MCP client in tests"): met by the
+`tests/mcp/` smoke and end-to-end tests over the in-memory and stdio transports.
+
+Performance (median of 30 calls, full dataset). stdio overhead over direct tool execution:
+
+| Tool | Overhead |
+|---|---|
+| `get_kpi` | +7.6 ms |
+| `analyze_revenue` | +10.3 ms |
+| `forecast_metric` | +44.2 ms |
+| `detect_anomalies` | +24.3 ms |
+
+No Phase 6 code reads the injected-event ground truth, the generator or hidden customer health.
+No Phase 7 evaluation framework, Phase 8 API/UI, authentication, networked transport or
+production deployment functionality was implemented.
+

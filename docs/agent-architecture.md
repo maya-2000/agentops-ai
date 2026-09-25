@@ -421,7 +421,8 @@ not change. Each node, and the controls it now runs:
 - `validate_request`: input limits.
 - `plan_investigation`: the plan validator authorizes every step. A policy denial fails closed
   without a retry.
-- `execute_tools`:
+- `execute_tools` (through the shared `SecuredToolExecutor`, `app/security/execution.py`, which
+  the MCP server also uses):
   - each call is authorized again just before it runs and charged to the run budget;
   - tool and SQL deadlines apply, and retries follow the retry policy;
   - the output is validated before it can become evidence.
@@ -435,13 +436,14 @@ not change. Each node, and the controls it now runs:
 The Phase 4 checks remain the inner layer. Details: [security-architecture.md](security-architecture.md).
 Threats and residual risks: [security-threat-model.md](security-threat-model.md).
 
-## 18. How Phase 6 will expose tools through MCP
+## 18. MCP (Phase 6)
 
-`ToolDefinition` already carries what an MCP tool needs: name, description, JSON input schema
-(`input_schema`), output description, and a pure handler `(ToolContext, input) -> ToolOutput`.
-Phase 6 will register the same `TOOL_DEFINITIONS` with an MCP server that builds a `ToolContext`
-on the read-only database, and return `ToolResult` JSON with provenance. There is no agent
-logic in the tools, so MCP clients get the same numbers and the same error codes.
+The MCP server (`app/mcp/`) exposes the same twelve `ToolDefinition`s as `agentops_*` tools.
+Their input schemas are the tools' Pydantic models. Each call goes through the same
+`SecuredToolExecutor` that `execute_tools` uses (authorization, deadlines, retries, output
+validation, budget), and then through the same evidence builder. MCP clients therefore get the
+same numbers, evidence and error codes as the agent. MCP is an external tool interface; the
+planning and reasoning stay in this graph. See [mcp-architecture.md](mcp-architecture.md).
 
 ## 19. How Phase 7 will evaluate the agent
 
