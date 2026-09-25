@@ -374,8 +374,21 @@ Two early hot spots were removed:
   environment changes);
 - rendering each prompt twice.
 
-## 18. Ready for Phase 6 (MCP)
+## 18. The MCP boundary (Phase 6)
 
-The same `ToolAuthorizationPolicy`, argument policy, SQL validator, output validator, budget and
-audit events can guard an MCP server. Those clients would be untrusted in exactly the way the
-model is today.
+MCP clients are untrusted in the same way as the model. Phase 6 therefore reuses these controls
+rather than adding new ones:
+
+- **One execution path.** The sequence from authorization to charging the budget
+  (authorize → deadline → execute → retry → validate output → charge budget) is
+  `SecuredToolExecutor` (`app/security/execution.py`). It used to be inline in `execute_tools`,
+  and now the agent and the MCP adapter both call it.
+- **One permission table.** Each MCP tool runs under a declared intent that
+  `INTENT_TOOL_PERMISSIONS` must permit. Tools switched off for MCP join the policy's disabled
+  set.
+- **Data leaving the process.** `mask_withheld_fields` (`app/security/data_policy.py`) masks
+  withheld and PII fields in results sent to MCP clients, using the same column lists and the
+  same `PII_ALLOWED_OPERATIONS` rule. Responses are redacted with `redact_value`, which now
+  resolves the secret literals once per call instead of once per string.
+
+Details: [mcp-architecture.md](mcp-architecture.md).
