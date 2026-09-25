@@ -62,8 +62,9 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-# Markdown tables in the rendered data dictionary cannot be wrapped.
+# Markdown tables in the rendered data dictionary and evaluation report cannot be wrapped.
 "app/database/data_dictionary.py" = ["E501"]
+"evals/reports/writer.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"
