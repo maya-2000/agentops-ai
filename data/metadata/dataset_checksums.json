@@ -1,39 +1,39 @@
 {
   "dataset_version": "1.0.0",
   "random_seed": 42,
-  "fingerprint_sha256": "2a6dfe5953d818274a61b3df47767660923f95cda04d5733194a5553e4d6bac7",
+  "fingerprint_sha256": "870c7abe6bf9c0ec586afc1818517c4cbade69e0af35ce8b38e7be86dbcd5d96",
   "tables": {
     "customers": {
       "row_count": 5000,
-      "md5": "ae296390571d37b45d4d73eb6106855a"
+      "md5": "d2827f55bb6719ddf024053982a4f7e4"
     },
     "subscriptions": {
-      "row_count": 7045,
-      "md5": "29949c275b6111031522668f90b3b7df"
+      "row_count": 7040,
+      "md5": "7de6412645e63670465925b11573a880"
     },
     "usage_events": {
-      "row_count": 306287,
-      "md5": "7f960adf86e1086cf35fbbbf571dbb18"
+      "row_count": 306322,
+      "md5": "d2fde4c4ae5278adac8331156a8697a3"
     },
     "sales_opportunities": {
-      "row_count": 12537,
-      "md5": "2df3cd3c86addb32f8c8fccba7d3ebe2"
+      "row_count": 12692,
+      "md5": "c86ece0602e7a8b321b43b3bebbdeaa9"
     },
     "support_tickets": {
       "row_count": 55265,
-      "md5": "691cd0d3d3600db76101f8bf0d1ccfdf"
+      "md5": "30027685c86ed43b3cfafb03cab9510e"
     },
     "marketing_campaigns": {
       "row_count": 555,
       "md5": "76a41da314a67bb839b098dc67fac9af"
     },
     "daily_revenue": {
-      "row_count": 2395948,
-      "md5": "1c36827b30cecf2586c054b6e5aebedf"
+      "row_count": 2395649,
+      "md5": "ae8bb8cdf1dd18c35b83e34c62516172"
     },
     "product_features": {
       "row_count": 8213,
-      "md5": "da25c7e661c2b4c3e8ff0ef7d4b08933"
+      "md5": "eff9b0213f3766ebebe684be6faf524a"
     }
   }
 }
