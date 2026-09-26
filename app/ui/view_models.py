@@ -673,6 +673,8 @@ def error_view(failure: APIFailure) -> ErrorView:
     if failure.kind == "timeout":
         return ErrorView("The analysis took too long.", failure.message, "Try a narrower question.", None)
     hints = {
+        "unauthorized": "The UI is not authorised to call the API: check that API_AUTH_TOKEN is set for the UI.",
+        "rate_limited": "Too many questions in a short time. Wait a moment, then ask again.",
         "empty_question": "Type a question first.",
         "question_too_long": "Shorten the question.",
         "busy": "Another analysis is running. Try again in a few seconds.",
@@ -692,18 +694,33 @@ class HistoryEntry:
     asked_at: str
 
 
+MAX_HISTORY_TEXT_CHARS = 1000
+
+
 def history_entry(question: str, *, response: Json | None = None, failure: APIFailure | None = None) -> HistoryEntry:
+    """What the session keeps of one question: its (redacted) text, outcome and a bounded answer.
+
+    The API returns the question as the agent stored it, with secret-like values removed; that copy
+    is kept instead of the typed text. Nothing here outlives the browser session.
+    """
     now = datetime.now().strftime("%H:%M:%S")
     if response is not None:
+        stored = response.get("question")
         return HistoryEntry(
-            question=question,
+            question=(str(stored) if isinstance(stored, str) and stored else question)[:MAX_HISTORY_TEXT_CHARS],
             outcome=str(response.get("outcome", "")),
-            answer=str(response.get("answer", "")),
+            answer=str(response.get("answer", ""))[:MAX_HISTORY_TEXT_CHARS],
             request_id=str(response.get("request_id", "")) or None,
             asked_at=now,
         )
     message = failure.message if failure else "No response."
-    return HistoryEntry(question, "error", message, failure.request_id if failure else None, now)
+    request_id = failure.request_id if failure else None
+    return HistoryEntry(question[:MAX_HISTORY_TEXT_CHARS], "error", message, request_id, now)
+
+
+def bounded_history(entries: Sequence[HistoryEntry], entry: HistoryEntry, limit: int) -> list[HistoryEntry]:
+    """Newest first, at most ``limit`` entries (0 keeps none)."""
+    return [entry, *entries][: max(0, limit)]
 
 
 def visualization_groups(response: Json) -> dict[str, list[Json]]:
