@@ -99,7 +99,7 @@ MCP client ──(JSON-RPC over stdio)──▶ app/mcp/server.py        low-lev
 | Module | Responsibility |
 |---|---|
 | `registry.py` | The single catalogue: the twelve `agentops_*` tools, each bound to its Phase 4 definition, with its intent, output kind, composed description, schemas and version metadata |
-| `schemas.py` | `MCPToolOutput`, the response envelope and `outputSchema` of every tool; `ForecastView`, `AnomalyReportView` |
+| `schemas.py` | `MCPToolOutput`, the response envelope and `outputSchema` of every tool; `ForecastView` and `AnomalyReportView` (defined in `app/tools/views.py` since Phase 8, shared with the HTTP API, and re-exported here) |
 | `adapters.py` | `MCPToolService`: one call in, one validated, redacted, size-bounded output out; request-scoped state |
 | `errors.py` | The MCP error categories and fixed messages, derived from the Phase 5 categories |
 | `config.py` | `MCPServerConfig` from settings |

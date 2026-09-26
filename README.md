@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 7 of 9 complete.**
+> **Status: Phase 8 of 9 complete.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
@@ -19,7 +19,7 @@ observed facts separate from inference and says when the evidence is insufficien
 | 5 | Guardrails, security and reliability | ✅ |
 | 6 | MCP integration | ✅ |
 | 7 | Evaluation & benchmark suite (89 scenarios, deterministic grading, security, MCP parity) | ✅ |
-| 8 | FastAPI and Streamlit | ⏳ |
+| 8 | Product API and UI (FastAPI + Streamlit: typed answers, evidence, charts, trace) | ✅ |
 | 9 | Final QA and portfolio documentation | ⏳ |
 
 ## The data: Northwind Cloud
@@ -250,6 +250,101 @@ python -m evals.run --category prompt_injection --multi-seed 7,2027
 
 Metrics, thresholds, reports and limitations: [`docs/evaluation.md`](docs/evaluation.md)
 
+## Running AgentOps
+
+Ask a question in the browser (or over HTTP) and get:
+
+- a concise answer;
+- the key figures and the period compared;
+- typed findings (observed, calculated, inferred, recommended);
+- charts drawn from the evidence;
+- forecast and anomaly details;
+- an evidence and provenance table;
+- the analysis trace.
+
+Everything runs locally with the deterministic offline model: no API key, no network.
+
+**1. Install** (Python 3.11+, pip):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"      # everything, including tests; or: pip install -e ".[api,ui]"
+cp .env.example .env         # optional; the defaults work without it
+```
+
+**2. Generate the data** (once, about 30 s): `python -m data.generator.generate` builds
+`database/northwind_cloud.duckdb`.
+
+**3. Start the API** (terminal 1):
+
+```bash
+python -m app.api            # http://127.0.0.1:8000, OpenAPI docs at /docs
+```
+
+**4. Start the UI** (terminal 2):
+
+```bash
+streamlit run app/ui/main.py # http://localhost:8501
+```
+
+**Example request:**
+
+```bash
+curl -s http://127.0.0.1:8000/api/v1/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "What was revenue in July compared with June?"}'
+```
+
+It returns `outcome: "answered"`, the answer ("Revenue changed by +SGD 40,472 (+0.70%) from
+2026-06 to 2026-07."), both periods, KPI values, claims, evidence with query IDs, the tool trace
+and two chart specs. `GET /api/v1/health` and `GET /api/v1/capabilities` describe the service.
+
+**Try these questions:**
+
+- What was revenue in July compared with June?
+- Which region had the largest revenue decline?
+- Which acquisition channel has the highest CAC?
+- What is our 3-month revenue forecast?
+- Are there any unusual trends in support tickets?
+- Why did support tickets increase?
+
+The last one tests the premise. Tickets actually fell in August (-13.4%): the answer reports the
+decrease rather than inventing an increase, and shows the June spike flagged by the anomaly check.
+
+**Architecture.**
+
+```
+Streamlit UI (app/ui)        formats and draws; no data access, no calculations
+      │ HTTP (JSON)
+FastAPI (app/api)            validation, request IDs, safe errors, progress, chart specs (copied, never recomputed)
+      │ AgentRunner.run
+LangGraph agent (app/agent)  understand → validate → plan → execute → evidence → validate → respond → validate
+      │ plans of tool calls
+Secured executor (app/security)  authorization, data-exposure policy, SQL safety, budgets, deadlines, output checks
+      │
+Tools (app/tools) → analytics / forecasting / anomalies (Phases 2–3) → read-only DuckDB
+```
+
+**Security boundary.** The API and UI are new entry points to the agent, not a path around it.
+Every question goes through `AgentRunner.run`, so the Phase 5 controls apply unchanged. The API has
+no SQL, tools, file access or settings of its own, and unknown request fields are rejected. No route
+serves files, so the hidden ground truth (`data/seeds/`) is unreachable. Refusals are controlled
+responses (HTTP 200, `outcome: "refused"`) without security internals. Errors are fixed messages
+with a request ID: no stack traces, SQL, paths or secrets. There is no authentication: it is a
+local development service bound to `127.0.0.1`. The API tests repeat the Phase 5/7 attacks over
+HTTP.
+
+**Evidence and provenance.** Every number in an answer comes from an evidence item. Each item is
+produced by a tool call and carries the period, filters, source tables, calculation, query IDs and a
+fingerprint. Each claim cites its evidence and is typed: observed fact, calculated result, inference
+or recommendation. The UI shows all of it in "Evidence & Provenance"; charts and KPI cards reuse the
+same numbers. Forecasts are labelled as estimates with their interval, model and backtest.
+Anomalies are labelled as statistically unusual, which is not necessarily bad.
+
+Details: [`docs/api.md`](docs/api.md) (contract, errors, request IDs, security, performance) and
+[`docs/ui.md`](docs/ui.md) (page, refusal handling, testing).
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -261,14 +356,17 @@ pip install -e ".[dev]"
 cp .env.example .env              # optional; defaults work without it
 
 python -m data.generator.generate # build database/northwind_cloud.duckdb (~30 s)
-pytest                            # full test suite (~4 min; builds its own datasets)
+pytest                            # full test suite (builds its own datasets)
 python -m evals.run --suite critical  # evaluation regression suite (~12 s)
+python -m app.api                 # API (see "Running AgentOps")
+streamlit run app/ui/main.py      # web UI
 ```
 
-The test suite needs no API key, LLM, network access or pre-built database: the agent tests use
-the deterministic offline model and a scripted test double.
+The test suite needs no API key, LLM, network access, browser or pre-built database. The agent
+tests use the deterministic offline model and a scripted test double. The API and UI tests run the
+app in-process (FastAPI's test client, Streamlit's `AppTest`).
 
-## Repository layout (so far)
+## Repository layout
 
 ```
 app/
@@ -288,6 +386,9 @@ app/
                          data-exposure policy, output guard, budgets, retries, timeouts, redaction, audit events,
                          the secured tool executor shared by the agent and MCP
   mcp/                   MCP server: tool registry, adapters, schemas, error model, audit, stdio entry point
+  api/                   FastAPI app: /ask, /ask/stream, /health, /capabilities, /metrics; schemas, agent service,
+                         presenter and chart specs, error model, request-ID middleware
+  ui/                    Streamlit page, HTTP client, testable view models, rendering
 evals/                   evaluation harness (not part of the app): scenario datasets, independent references,
                          hidden-label mapping, runners, deterministic graders, metrics, thresholds, reports
 data/
@@ -297,8 +398,9 @@ data/
 database/                DuckDB file (generated, git-ignored)
 docs/                    implementation plan, data dictionary, analytics guide, KPI catalog,
                          forecasting and anomaly-detection guides, agent architecture,
-                         security architecture and threat model, MCP architecture, evaluation
-tests/                   unit, integration, security (adversarial, SQL attack, regression), MCP and evaluation tests
+                         security architecture and threat model, MCP architecture, evaluation, API, UI
+tests/                   unit, integration, security (adversarial, SQL attack, regression), MCP, evaluation,
+                         API (contract, security, streaming, isolation, performance) and UI tests
 ```
 
 ## License
