@@ -9,7 +9,7 @@ network model handles open-ended phrasing through the same interface and validat
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from app.llm.schemas import AnalysisType, FilterItem, Intent, UnderstandingOutput
@@ -19,7 +19,12 @@ _OUT_OF_SCOPE = re.compile(
     r"competitor\w*|salar(y|ies)|employee\w*|election|president|recipe|football|lottery|horoscope)\b",
     re.IGNORECASE,
 )
-_WRITE = re.compile(r"\b(delete|drop|insert|truncate|modify|overwrite|alter)\b", re.IGNORECASE)
+# "drop" is a write only as a command ("Drop the revenue table"), not as a noun ("the biggest drop in revenue").
+_WRITE = re.compile(
+    r"\b(delete|insert|truncate|modify|overwrite|alter)\b|^\s*drop\b|"
+    r"\bdrop\b(?=(?:\s+\w+){0,3}\s+(?:tables?|databases?|db|schemas?|views?|columns?|index|data|rows?|records?)\b)",
+    re.IGNORECASE,
+)
 
 _METRICS: tuple[tuple[str, str], ...] = (
     (r"\bnet revenue retention\b|\bnrr\b", "nrr"),
@@ -65,7 +70,8 @@ _DIMENSION_STEMS = (
     ("feature", "product_feature"),
 )
 _DIMENSION_ASK = re.compile(
-    r"\b(?:by|which|per|across|each|what|every)\s+(?:customer\s+|ticket\s+|sales\s+|product\s+)?"
+    r"\b(?:by|which|per|across|each|what|every)\s+(?:customer\s+|ticket\s+|sales\s+|product\s+|marketing\s+|"
+    r"acquisition\s+)?"
     r"(segment|region|countr(?:y|ies)|plan|industr(?:y|ies)|channel|categor(?:y|ies)|priority|rep|campaign|feature)s?\b",
     re.IGNORECASE,
 )
@@ -105,12 +111,26 @@ _CHANGE = re.compile(
 _CONTRIBUTION = re.compile(r"\b(contribut\w*|accounted for|account for|responsible for)\b", re.IGNORECASE)
 _HIGHEST = re.compile(r"\b(highest|most|largest|biggest|top|maximum|best)\b", re.IGNORECASE)
 _LOWEST = re.compile(r"\b(lowest|least|smallest|minimum|worst)\b", re.IGNORECASE)
+_DECREASE = re.compile(r"\b(declin\w*|decreas\w*|drop\w*|fell|fall\w*|shr[ai]nk\w*|contract\w*)\b", re.IGNORECASE)
+_INCREASE = re.compile(r"\b(increas\w*|grow\w*|grew|growth|gain\w*|rise|rose|rising|jump\w*)\b", re.IGNORECASE)
+_PERCENT = re.compile(r"%|\b(percent\w*|relative)\b", re.IGNORECASE)
 _RISK = re.compile(r"\b(at[- ]risk|risk\w*)\b", re.IGNORECASE)
 _COHORT = re.compile(r"\bcohorts?\b", re.IGNORECASE)
 _COMPARISON_MARKER = re.compile(
     r"\b(?:compared (?:with|to)|vs\.?|versus|than|relative to|against)\s+(?:the\s+|that\s+of\s+(?:the\s+)?)?$"
 )
 _FROM_MARKER = re.compile(r"\bfrom\s+(?:the\s+)?$")
+# "may" is a month (not the verb) after a preposition or comparison word: "in May", "compared with May",
+# "from May to July", "July vs May", "July and May".
+_MAY_MONTH_CONTEXT = re.compile(
+    r"\b(?:in|of|for|since|until|till|to|from|and|or|vs\.?|versus|with|than|against|between|through|during|"
+    r"before|after|over)\s+$"
+)
+_ISO_MONTH = re.compile(r"\b(20\d{2})-(0[1-9]|1[0-2])\b(?!-\d)")
+_ISO_DATE = r"20\d{2}-\d{2}-\d{2}"
+_ISO_RANGE = re.compile(rf"\b({_ISO_DATE})(?:\s+(?:to|until|through|-|\u2013)\s+|\.\.)({_ISO_DATE})\b")
+_ISO_DAY = re.compile(rf"\b{_ISO_DATE}\b")
+_ISO_QUARTER = re.compile(r"\b(20\d{2})-q([1-4])\b")
 
 
 def understand(context: dict[str, Any]) -> dict[str, Any]:
@@ -132,7 +152,7 @@ def understand(context: dict[str, Any]) -> dict[str, Any]:
     metric = metrics[0] if metrics else None
     dimensions = list(dict.fromkeys(_dimension_key(m.group(1)) for m in _DIMENSION_ASK.finditer(q)))
     filters = _filters(q, context, dimensions)
-    periods, comparisons = _periods(q, as_of)
+    periods, comparisons, day_level = _periods(q, as_of)
     horizon = _horizon(q, as_of)
     ambiguities: list[str] = []
 
@@ -151,6 +171,19 @@ def understand(context: dict[str, Any]) -> dict[str, Any]:
         metric = "logo_churn_rate" if re.search(r"churn", q, re.IGNORECASE) else None
     if len({_family(m) for m in metrics}) > 1 and intent in (Intent.REVENUE_INVESTIGATION, Intent.PERIOD_COMPARISON):
         intent = Intent.MIXED_INVESTIGATION
+    material = False
+    if day_level:
+        ambiguities.append(
+            "Day-level dates are not supported; ask for a month, quarter or year (for example 2026-07 or 2026-Q2)."
+        )
+        material = True
+    if analysis == "lowest" and dimensions and _change_ranking(q, metric):
+        # "Smallest decline" has no analytics answer (only the largest decline/increase are named): ask, never
+        # answer with a level ranking.
+        ambiguities.append(
+            "A ranking by the smallest change is not available; ask for the largest decline or the largest increase."
+        )
+        material = True
     vocab: dict[str, list[str]] = context.get("dimension_values", {})
     shared = set(vocab.get("segment", [])) & set(vocab.get("plan", []))
     for item in filters:
@@ -168,6 +201,7 @@ def understand(context: dict[str, Any]) -> dict[str, Any]:
         analysis_type=analysis,
         confidence=0.7,
         ambiguities=ambiguities,
+        material_ambiguity=material,
     ).model_dump(mode="json")
 
 
@@ -226,6 +260,8 @@ def _intent(
         return Intent.CUSTOMER_INVESTIGATION, "cohort"
     if dimensions and _CONTRIBUTION.search(q):
         return Intent.DIMENSIONAL_COMPARISON, "contribution"
+    if dimensions and _HIGHEST.search(q) and (ranking := _change_ranking(q, metric)):
+        return Intent.DIMENSIONAL_COMPARISON, ranking
     if dimensions and (_HIGHEST.search(q) or _LOWEST.search(q)):
         return Intent.DIMENSIONAL_COMPARISON, "lowest" if _LOWEST.search(q) else "highest"
     if _CHANGE.search(q) and metric is not None:
@@ -236,6 +272,18 @@ def _intent(
         if re.search(pattern, q, re.IGNORECASE):
             return intent, None
     return Intent.UNSUPPORTED, None
+
+
+def _change_ranking(q: str, metric: str | None) -> AnalysisType | None:
+    """A ranking of members by their change ("largest decline"), not by their level ("highest revenue")."""
+    if metric == "revenue_growth":
+        return None  # already a change metric: ranking its values is a level ranking
+    percent = bool(_PERCENT.search(q))
+    if _DECREASE.search(q):
+        return "largest_pct_decrease" if percent else "largest_decrease"
+    if _INCREASE.search(q):
+        return "largest_pct_increase" if percent else "largest_increase"
+    return None
 
 
 def _filters(q: str, context: dict[str, Any], asked: list[str]) -> list[FilterItem]:
@@ -272,14 +320,31 @@ def _month_spec(name: str, year: str | None, as_of: date) -> str:
     return f"{default_year if year is None else int(year)}-{month:02d}"
 
 
-def _periods(q: str, as_of: date) -> tuple[list[str], list[str]]:
-    """(periods asked about, comparison periods) in question order.
+def _periods(q: str, as_of: date) -> tuple[list[str], list[str], bool]:
+    """(periods asked about, comparison periods, whether a day-level date could not be used) in question order.
 
     A period introduced by "compared with", "vs", "than", "relative to" or "against" is a comparison
-    period, and so is the first period of "from A to B".
+    period, and so is the first period of "from A to B". An explicit ISO date range that covers whole
+    months, a quarter or a year becomes that period; any other day-level date is reported, never read as
+    a year.
     """
     found: list[tuple[int, str]] = []
     lowered = q.lower()
+    iso_spans: list[tuple[int, int]] = []
+    ranges: set[int] = set()
+    day_level = False
+    for match in _ISO_RANGE.finditer(q):
+        iso_spans.append(match.span())
+        spec = _range_spec(date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2)))
+        if spec is None:
+            day_level = True
+        else:
+            found.append((match.start(), spec))
+            ranges.add(match.start())
+    for match in _ISO_DAY.finditer(q):
+        if not any(start <= match.start() < end for start, end in iso_spans):
+            iso_spans.append(match.span())
+            day_level = True
     for phrase, spec in (
         ("last month", "last_month"),
         ("this month", "last_month"),
@@ -299,14 +364,29 @@ def _periods(q: str, as_of: date) -> tuple[list[str], list[str]]:
         if count:
             found.append((match.start(), f"trailing_{count}_months"))
     for match in _MONTH_RE.finditer(q):
-        if match.group(1).lower() == "may" and not re.search(r"\bmay\s+\d{4}\b|\bin may\b", lowered):
+        if match.group(1).lower() == "may" and not _may_is_month(q, match):
             continue  # "may" as a verb
         found.append((match.start(), _month_spec(match.group(1), match.group(2), as_of)))
+    # Explicit ISO labels ("2026-07", "2026-Q2") name one period each, not a bare year.
+    for match in _ISO_MONTH.finditer(q):
+        found.append((match.start(), f"{match.group(1)}-{match.group(2)}"))
+        iso_spans.append(match.span())
+    for match in _ISO_QUARTER.finditer(lowered):
+        found.append((match.start(), f"{match.group(1)}-Q{match.group(2)}"))
+        iso_spans.append(match.span())
+
+    def in_iso(position: int) -> bool:
+        return any(start <= position < end for start, end in iso_spans)
+
     for match in re.finditer(r"\bq([1-4])\s*(\d{4})?\b", lowered):
+        if in_iso(match.start()):
+            continue
         year = match.group(2) or str(as_of.year)
         found.append((match.start(), f"{year}-Q{match.group(1)}"))
     month_years = {m.group(2) for m in _MONTH_RE.finditer(q) if m.group(2)}
     for match in re.finditer(r"\b(20\d{2})\b", q):
+        if in_iso(match.start()):
+            continue
         if match.group(1) not in month_years and not re.search(rf"q[1-4]\s*{match.group(1)}", lowered):
             found.append((match.start(), match.group(1)))
     ordered = sorted(found)
@@ -314,11 +394,37 @@ def _periods(q: str, as_of: date) -> tuple[list[str], list[str]]:
     comparisons: list[str] = []
     for index, (position, spec) in enumerate(ordered):
         before = lowered[:position]
-        if _COMPARISON_MARKER.search(before) or (_FROM_MARKER.search(before) and index + 1 < len(ordered)):
+        from_a_to_b = _FROM_MARKER.search(before) and index + 1 < len(ordered) and position not in ranges
+        if _COMPARISON_MARKER.search(before) or from_a_to_b:
             comparisons.append(spec)
         else:
             periods.append(spec)
-    return periods, comparisons
+    return periods, comparisons, day_level
+
+
+def _range_spec(start: date, end: date) -> str | None:
+    """The month, quarter or year an explicit date range covers exactly (None for any other range)."""
+    if end < start or start.day != 1 or (end + timedelta(days=1)).day != 1:
+        return None
+    months = (end.year - start.year) * 12 + end.month - start.month + 1
+    if months == 1:
+        return f"{start.year}-{start.month:02d}"
+    if months == 3 and start.month in (1, 4, 7, 10):
+        return f"{start.year}-Q{(start.month - 1) // 3 + 1}"
+    if months == 12 and start.month == 1:
+        return str(start.year)
+    return None
+
+
+def _may_is_month(q: str, match: re.Match[str]) -> bool:
+    """Whether a "may" token names the month: followed by a year, or after a preposition or comparison word."""
+    if match.group(2):
+        return True
+    before = q[: match.start()].lower()
+    if _MAY_MONTH_CONTEXT.search(before):
+        return True
+    # A capitalised "May" inside the sentence (not its first word) is the month.
+    return match.group(1) == "May" and bool(before.strip())
 
 
 def _horizon(q: str, as_of: date) -> int | None:
