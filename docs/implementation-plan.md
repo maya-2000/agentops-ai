@@ -340,9 +340,16 @@ Details go in `docs/security.md`.
 
 ## 12. API
 
+> Implemented in Phase 8 with deliberate deviations (an agent-only contract: `/api/v1/ask`,
+> `/ask/stream`, `/health`, `/capabilities`, `/metrics`); see the Phase 8 notes in §22 and
+> [api.md](api.md).
+
 FastAPI (`app/api/`): `GET /health`, `GET /schema`, `GET /kpis`, `POST /agent/query`, `POST /analytics/kpi`, `POST /analytics/anomaly`, `POST /analytics/forecast`, `POST /evaluation/run`, `GET /evaluation/results`, plus `GET /agent/trace/{request_id}`. Pydantic request/response models, request-id middleware, consistent error envelope. Contracts documented in `docs/api.md` and OpenAPI.
 
 ## 13. UI
+
+> Implemented in Phase 8 as one question-answering page that calls the API over HTTP; see the
+> Phase 8 notes in §22 and [ui.md](ui.md).
 
 Streamlit multipage (`app/ui/`): AI Analyst, KPI Dashboard, Anomaly Monitor, Forecasting, Agent Trace, Evaluation, Data Dictionary. Talks to the API via `API_URL` (with a direct in-process fallback flag for demos). Plotly charts; neutral, enterprise styling.
 
@@ -851,3 +858,32 @@ the root-cause table: [`docs/phase-7-1-reliability.md`](phase-7-1-reliability.md
 | Evaluation (`evals/`) | The grader's own claim-subject check. The customer-ID workaround is removed. Four identity corruptions are added for the regression tests; `eval_v1` is unchanged. |
 
 No Phase 8 API/UI or Phase 9 production deployment functionality was implemented.
+
+### Phase 8 (product API and user interface) — complete
+
+Phase 8 makes the agent usable: a Streamlit page calls a FastAPI API, which calls
+`AgentRunner.run`. Neither layer adds analytics, SQL, planning or permissions. Details:
+[api.md](api.md) (including the Step 0 architecture assessment) and [ui.md](ui.md).
+
+| Topic | Plan (§12, §13, §14) | Implemented | Reason |
+|---|---|---|---|
+| API surface | `/health`, `/schema`, `/kpis`, `/agent/query`, `/analytics/kpi`, `/analytics/anomaly`, `/analytics/forecast`, `/evaluation/run`, `/evaluation/results`, `/agent/trace/{id}` | `POST /api/v1/ask`, `POST /api/v1/ask/stream`, `GET /api/v1/health`, `/capabilities`, `/metrics` | Phase 8 brief: API → agent only. Direct analytics endpoints would be a second path around planning and evidence validation. Evaluation stays a CLI outside the app. Traces are returned with each answer instead of being stored |
+| Response model | New API models | Serialises the existing `AgentResponse`, `Claim`, `Evidence` and `ValidatedRequest`; views (KPIs, trace, forecast/anomaly sections, chart specs) only copy from them | One representation of evidence and claims |
+| Forecast/anomaly views | MCP-only | Moved to `app/tools/views.py`, shared by MCP and the API (`app/mcp/schemas.py` re-exports them) | One definition; the MCP output is unchanged |
+| Agent changes | — | `AgentRunner.run(question, *, run_id=None, on_progress=None)`: a validated caller run ID, and LangGraph `stream` only when a progress callback is given; `AgentRunResult.tool_results` (excluded from serialisation) | Request-ID propagation, progress, and chart series without re-querying |
+| Charts | Plotly | Renderer-neutral `VisualizationSpec` from the API, drawn as Vega-Lite by the UI (Streamlit's built-in renderer) | No new charting dependency; any client can draw the same rows |
+| UI | 7-page Streamlit app with an in-process fallback | One page (question, answer, findings, KPI cards, charts, forecast, anomalies, evidence, trace, session history) that calls the API only | Phase 8 brief: UI → API, never the database or analytics; the dashboards would bypass the agent |
+| Observability | Persisted JSONL traces with the question and SQL | One allow-listed JSON log line per request (IDs, status, outcome, counts, timings); no question, answer, data or client address; nothing persisted | Phase 8 logging rules |
+| Concurrency | — | One runner, one read-only connection and one worker thread per process; per-request timeout (504) and queue bound (503) | The DuckDB connection is never used concurrently (same rule as the MCP server) |
+| Dependencies | FastAPI, Streamlit, Plotly in the core | Optional extras `api` (fastapi, uvicorn) and `ui` (streamlit, httpx); `dev` includes both | The agent, MCP server and benchmark do not need them |
+| Isolation tests | `api`/`ui` forbidden | `test_frameworks_are_confined_to_their_layers` (FastAPI/uvicorn only in `app/api`, Streamlit/httpx only in `app/ui`, MCP only in `app/mcp`) and `tests/api/test_api_isolation.py` | The packages now exist; the boundaries are enforced instead |
+
+Fixes found while building Phase 8, each with a regression test:
+
+- "What is our 3-month revenue forecast?" produced a one-month forecast. The deterministic model
+  now reads "N-month forecast/outlook/projection" and "N months ahead" as the horizon.
+- A tool handler that returned a non-typed object crashed the agent run. `ToolRegistry.execute`
+  now fails the call closed with `invalid_tool_output`.
+
+The benchmark scenarios, thresholds and security policy are unchanged. No Phase 9 work, deployment,
+authentication or persistence was added.
