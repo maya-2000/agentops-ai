@@ -11,7 +11,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.analytics.errors import AnalyticsDatabaseError, AnalyticsError, InvalidRequestError
 from app.tools import handlers
@@ -291,6 +291,11 @@ class ToolRegistry:
             return failure(getattr(exc, "code", "analytics_error"), str(exc), False)
         except Exception as exc:  # an unexpected failure is reported, never hidden or replaced
             return failure("internal_error", f"{type(exc).__name__}: {exc}", False)
+        if not isinstance(output, ToolOutput) or not isinstance(output.result, BaseModel):
+            # A handler that returns something other than a typed output fails closed like any
+            # other invalid output: the run continues with a failed call instead of crashing.
+            kind = type(output.result if isinstance(output, ToolOutput) else output).__name__
+            return failure("invalid_tool_output", f"{request.tool_name} returned {kind}, not a typed result", False)
         return ToolResult(
             call_id=request.call_id,
             tool_name=request.tool_name,

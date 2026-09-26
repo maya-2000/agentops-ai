@@ -76,6 +76,10 @@ _DIMENSION_ASK = re.compile(
     re.IGNORECASE,
 )
 _NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "nine": 9, "twelve": 12, "a": 1}
+_MONTHS_AHEAD = re.compile(
+    r"\b(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")[\s-]months?\s+"
+    r"(?:ahead\b|(?:[a-z]+\s+){0,2}(?:forecast|projection|outlook)s?\b)"
+)
 _MONTHS = (
     "january",
     "february",
@@ -437,6 +441,9 @@ def _horizon(q: str, as_of: date) -> int | None:
         return 3
     if re.search(r"\bnext year\b", lowered):
         return 12
+    # "a 3-month forecast", "six month outlook", "3 months ahead": a count of months naming the horizon.
+    if match := _MONTHS_AHEAD.search(lowered):
+        return int(match.group(1)) if match.group(1).isdigit() else _NUMBER_WORDS[match.group(1)]
     if _FORECAST.search(q) and (match := re.search(r"\b(20\d{2})\b", q)):
         year = int(match.group(1))
         if year > as_of.year:
