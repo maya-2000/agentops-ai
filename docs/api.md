@@ -1,4 +1,4 @@
-# AgentOps HTTP API (Phase 8)
+# AgentOps HTTP API (Phases 8–9)
 
 The API makes the evidence-backed agent usable over HTTP. It is a thin transport: every question
 is answered by the existing Phase 4 agent (`AgentRunner.run`), whose tool calls go through the Phase
@@ -6,11 +6,19 @@ is answered by the existing Phase 4 agent (`AgentRunner.run`), whose tool calls 
 chart specifications. It adds no analytics, SQL, planning or permissions of its own.
 
 - Code: `app/api/` (FastAPI). Start it with `python -m app.api` (or `agentops-api`).
-- Interactive schema: `http://127.0.0.1:8000/docs` (OpenAPI at `/openapi.json`).
+- Interactive schema: `http://127.0.0.1:8000/docs` (OpenAPI at `/openapi.json`); off in production.
 - The web UI (`app/ui/`, [ui.md](ui.md)) is a client of this API.
 
-**Local development service.** There is no authentication, and it is not meant to be exposed on a
-network. It binds to `127.0.0.1` by default.
+**Phase 9: authenticated and rate-limited.**
+
+- Every endpoint except `/health` and `/readiness` requires `Authorization: Bearer
+  <API_AUTH_TOKEN>`.
+- The ask endpoints are rate-limited per client.
+- The API refuses to start with an unsafe configuration.
+
+Operation (configuration, Docker, logs, metrics, shutdown): [deployment.md](deployment.md).
+Security model: [security.md](security.md). Sections 1–2 below record the Phase 8 design, which is
+unchanged.
 
 ## 1. Architecture assessment (Step 0)
 
@@ -45,12 +53,14 @@ Decisions that follow from it:
 
 ```
 Streamlit UI / curl ──HTTP──▶ FastAPI (app/api)
-                               │  RequestContextMiddleware: request ID, 413 body limit, security headers, request log
+                               │  RequestContextMiddleware: request ID, 413 body limit, security headers, request log, metrics
+                               │  CORSMiddleware (only when API_CORS_ORIGINS is set)
+                               │  AccessControlMiddleware: bearer token (401), JSON only (415), rate limit (429)
                                │  routes/ask.py: validate the question (empty, too long)
                                ▼
-                             AgentService (service.py): one worker thread, lock, timeout, queue bound
+                             AgentService (service.py): one worker thread, lock, timeout, queue bound, run tracker
                                ▼
-                             AgentRunner.run(question, run_id=request_id, on_progress=…)   (Phase 4 graph)
+                             AgentRunner.run(question, run_id=request_id, on_progress=…, cancel=…, deadline_seconds=…)
                                ▼
                              SecuredToolExecutor → tool registry → Phase 2/3 services → read-only DuckDB
                                ▼
@@ -63,13 +73,19 @@ or imports the MCP server. `tests/api/test_api_isolation.py` checks this statica
 
 ## 3. Endpoints
 
-| Method and path | Purpose | Success |
-|---|---|---|
-| `POST /api/v1/ask` | Ask a question; returns an `AskResponse` | 200 for every agent outcome (see §4) |
-| `POST /api/v1/ask/stream` | The same, as NDJSON progress events followed by one result or error event | 200 (request errors are returned before the stream starts) |
-| `GET /api/v1/health` | Readiness: status, version, agent and database availability, dataset version, as-of date, provider name | 200 (`ok` or `degraded`), 503 (`unavailable`) |
-| `GET /api/v1/capabilities` | KPIs, forecast and anomaly metrics, detectors, dimensions, analyses, outcomes, limits, example questions, what is not supported | 200 |
-| `GET /api/v1/metrics` | In-process counters since start-up: requests, outcomes, status codes, agent time, API overhead | 200 |
+| Method and path | Auth | Purpose | Success |
+|---|---|---|---|
+| `POST /api/v1/ask` | token | Ask a question; returns an `AskResponse` | 200 for every agent outcome (see §4) |
+| `POST /api/v1/ask/stream` | token | The same, as NDJSON progress events followed by one result or error event | 200 (request errors are returned before the stream starts) |
+| `GET /api/v1/health` | public | Liveness: `{"status": "ok", "version"}`. Checks nothing else | 200 |
+| `GET /api/v1/readiness` | public | Readiness: `status` (`ready` / `not_ready`), `version` and named boolean `checks` (configuration, database, agent, accepting_requests) | 200, or 503 when a check fails |
+| `GET /api/v1/capabilities` | token | KPIs, forecast and anomaly metrics, detectors, dimensions, analyses, outcomes, limits, example questions, what is not supported, dataset version, as-of date, provider name | 200 |
+| `GET /api/v1/metrics` | token | In-process counters and latency percentiles since start-up ([deployment.md §8](deployment.md#8-metrics)) | 200 (404 when `API_METRICS_ENABLED=false`) |
+
+Phase 9 changed `/health`: in Phase 8 it reported database and agent availability (and 503).
+Those checks moved to `/readiness`, and the dataset details to `/capabilities`. A liveness probe
+must not fail because of a dependency, or an orchestrator would restart a process that cannot
+recover by restarting.
 
 ### `POST /api/v1/ask`
 
@@ -180,12 +196,15 @@ API errors are failures to produce such a response. Every error body has the sam
 message is a fixed string:
 
 ```json
-{"request_id": "R-…", "error": {"code": "empty_question", "message": "The question is empty. …", "retryable": false, "issues": []}}
+{"request_id": "R-…", "error": {"code": "empty_question", "message": "The question is empty. …", "retryable": false, "issues": [], "request_id": "R-…"}}
 ```
 
 | HTTP | `code` | When |
 |---|---|---|
 | 400 | `malformed_request` | The body is not valid JSON |
+| 401 | `unauthorized` | Missing, malformed or wrong bearer token (`WWW-Authenticate: Bearer`); the same body in every case |
+| 415 | `unsupported_media_type` | `/ask` or `/ask/stream` without `Content-Type: application/json` |
+| 429 | `rate_limited` | Over `API_RATE_LIMIT` for this client (`Retry-After` in seconds) |
 | 422 | `invalid_request` | Schema violation: missing or wrongly typed field, unknown field, bad `request_id`. `issues` lists `{location, message}`; the submitted value is never echoed |
 | 422 | `empty_question` | Empty or whitespace-only question |
 | 422 | `question_too_long` | Longer than `AGENT_MAX_QUESTION_CHARS` |
@@ -193,7 +212,8 @@ message is a fixed string:
 | 404 / 405 | `not_found` / `method_not_allowed` | Unknown route or method. No static files are served |
 | 503 | `busy` | More than `API_MAX_PENDING_REQUESTS` requests waiting (`Retry-After: 5`) |
 | 503 | `agent_unavailable` | The database or agent could not be initialised at start-up (`Retry-After: 5`) |
-| 504 | `timeout` | The run exceeded `API_REQUEST_TIMEOUT_SECONDS` |
+| 503 | `shutting_down` | The service is draining after SIGTERM (`Retry-After: 5`) |
+| 504 | `timeout` | The run exceeded `API_REQUEST_TIMEOUT_SECONDS`; the run is cancelled |
 | 500 | `internal_error` | Anything unexpected. Only the exception class name goes to the log |
 
 ## 5. Request IDs, logs and metrics
@@ -205,15 +225,20 @@ message is a fixed string:
   request. Tool calls (`T1`, `T2`, …) and evidence items (`E1`, …) are numbered within that run.
   An invalid header is replaced, never echoed.
 - **Request log.** Each request produces one JSON line on the `agentops.api` logger, built from an
-  allow-list of keys: request and session IDs, method, path, status code, agent status, outcome,
-  error code, exception class name, tool calls, evidence and claim counts, and durations. It never
-  contains the question, answer, evidence values, headers, client addresses, prompts, environment
-  values or secrets. `python -m app.api` turns off uvicorn's access log, because that log records
-  client addresses.
-- **Headers.** Every response carries `Cache-Control: no-store` and `X-Content-Type-Options:
-  nosniff`.
+  allow-list of keys: request and session IDs, method, endpoint (the route template, never the
+  raw path), status code, agent status, outcome, error code, exception class name, tool calls,
+  evidence and claim counts, and durations. It never contains the question, answer, evidence
+  values, headers, client addresses, prompts, environment values or secrets. `python -m app.api`
+  turns off uvicorn's access log, because that log records client addresses. Since Phase 9 every
+  line (including uvicorn's) is formatted by `app/logs.py`: timestamp, level and logger, secrets
+  and paths redacted, tracebacks reduced to the exception type.
+- **Headers.** Every response carries `Cache-Control: no-store`, `X-Content-Type-Options:
+  nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`. API responses also carry
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, which the docs pages
+  omit.
 - **Metrics.** `GET /api/v1/metrics` returns in-memory counters since start-up (nothing is
-  persisted).
+  persisted). Expected outcomes, client errors and infrastructure errors are counted separately,
+  with p50/p95 latency and run states.
 
 ## 6. Visualization specs
 
@@ -274,14 +299,21 @@ The API is a new entry point to the agent, not a new path around it:
 ## 8. Concurrency and timeouts
 
 - One `AgentRunner` and one read-only database connection per process, and one worker thread.
-  Runs are serialised, and a lock also guards the health probe. `python -m app.api` starts a
-  single uvicorn worker.
+  Runs are serialised, and a lock also guards the readiness probe (skipped while a run holds the
+  connection). `python -m app.api` starts a single uvicorn worker.
 - `API_REQUEST_TIMEOUT_SECONDS` (default 150 s, above `AGENT_MAX_RUN_SECONDS`) bounds the wait.
-  After it, the client gets 504. A queued run is cancelled before it starts. A run that has already
-  started cannot be interrupted, because Python threads cannot be killed: it finishes in the
-  background under the agent's own limits (run wall clock, per-tool and SQL timeouts, budgets), and
-  its result is discarded.
+  After it, the client gets 504 at once. **Since Phase 9 the run is cancelled too**: the service
+  passes a cancel event and the remaining time to `AgentRunner.run`. The graph checks them
+  between nodes. DuckDB queries are interrupted at the deadline, and a model call waits no longer
+  than the time left. A queued run never starts; a running one stops at its next step with the
+  controlled limit response. So the worker is released within one step, not at the agent's own
+  run limit as in Phase 8. A client that disconnects cancels its run the same way.
+- `app/api/runs.py` tracks runs in memory: queued, running and stopping runs, and counters of how
+  runs ended (completed, refused, failed, timeout, cancelled). Finished runs are kept only as
+  counters, so memory stays bounded. There is no `/runs` endpoint: runs are synchronous and bounded
+  by the request, so there is nothing to poll or resume.
 - At most `API_MAX_PENDING_REQUESTS` (default 4) requests wait at once; more get 503 `busy`.
+- On SIGTERM the service drains (see [deployment.md §11](deployment.md#11-shutdown)).
 
 ## 9. Configuration
 
@@ -291,7 +323,7 @@ All settings live in `app/config.py` and can be set as environment variables or 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `API_HOST` | `127.0.0.1` | Bind address (keep it local: there is no authentication) |
+| `API_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` inside the container; publish the port on localhost or behind a proxy) |
 | `API_PORT` | `8000` | Port |
 | `API_REQUEST_TIMEOUT_SECONDS` | `150` | Wall-clock limit per request |
 | `API_MAX_REQUEST_BYTES` | `16384` | Largest accepted body |
@@ -299,8 +331,15 @@ All settings live in `app/config.py` and can be set as environment variables or 
 | `UI_API_URL` | `http://127.0.0.1:8000` | Where the UI sends questions |
 | `UI_REQUEST_TIMEOUT_SECONDS` | `180` | How long the UI waits |
 
-No secrets are needed with the default deterministic provider. With `LLM_PROVIDER=anthropic`, the
-key is read from `ANTHROPIC_API_KEY` as before and is never logged or returned.
+Phase 9 adds `APP_ENV`, `API_AUTH_MODE`, `API_AUTH_TOKEN`, `API_RATE_LIMIT`,
+`API_RATE_LIMIT_MAX_CLIENTS`, `API_CORS_ORIGINS`, `API_DOCS_ENABLED`, `API_METRICS_ENABLED`,
+`API_SHUTDOWN_GRACE_SECONDS`, `LOG_FORMAT` and the `UI_*` launcher settings. They are described in
+[deployment.md §3](deployment.md#3-environment-configuration), with the production start-up
+rules.
+
+The only secret needed with the default deterministic provider is `API_AUTH_TOKEN`. With
+`LLM_PROVIDER=anthropic`, the key is read from `ANTHROPIC_API_KEY` as before. Neither is ever
+logged or returned.
 
 ## 10. Performance
 
@@ -330,13 +369,56 @@ Agent time dominates (the forecast's model selection and backtests take about 28
 network LLM provider, model latency would dominate instead.
 `tests/api/test_api_performance.py` guards these properties with generous bounds.
 
+**Phase 9: the production path.** Measured on the generated dataset with the deterministic
+provider, warm processes, 25 requests per question, in milliseconds (median / p95):
+
+- **Direct:** `AgentRunner.run`.
+- **Local API:** `python -m app.api` with `APP_ENV=production`, bearer auth, rate limiting (raised
+  for the measurement), JSON logging and cooperative cancellation. Called over HTTP on localhost.
+- **Docker API:** the `agentops-api` image with the compose hardening (read-only filesystem, no
+  capabilities, read-only data mount), called on the published port.
+
+| Question | Direct | Local API | Docker API |
+|---|---:|---:|---:|
+| Revenue in July vs June | 35.6 / 44.7 | 39.9 / 48.5 | 40.0 / 46.9 |
+| Region with the largest revenue decline | 57.0 / 68.9 | 63.0 / 77.3 | 61.9 / 73.9 |
+| Channel with the highest CAC | 27.8 / 34.5 | 30.8 / 38.1 | 30.4 / 32.5 |
+| 3-month revenue forecast | 320.5 / 360.6 | 325.2 / 509.7 | 319.1 / 357.7 |
+| Unusual trends in support tickets | 92.3 / 109.4 | 150.2 / 177.7 † | 96.9 / 111.2 |
+| Why support tickets increased | 134.2 / 167.5 | 140.6 / 155.7 | 134.7 / 161.0 |
+| Prompt injection (refused) | 2.6 / 4.1 | 4.8 / 5.8 | 4.7 / 6.1 |
+| Out-of-scope question | 3.8 / 4.5 | 5.8 / 6.9 | 6.4 / 7.7 |
+| All questions pooled | 51.7 / 328.0 | 55.5 / 329.4 | 52.7 / 320.5 |
+
+† An outlier of this run: a first run of 15 requests per question measured 87.5 ms for this
+question on the local API (direct 91.2 ms).
+
+What the numbers show:
+
+- **API overhead.** The production API adds about 2–5 ms per request over a direct run: HTTP,
+  authentication, rate limiting, validation, structured logging and serialisation. The median of
+  the per-question differences was +4.5 ms for the local API and +2.6 ms in Docker. The fast
+  questions show it most clearly (+2 to +3 ms). On the analytical questions the difference is
+  within run-to-run noise (±5 ms on this shared machine).
+- **Docker.** The container adds no measurable latency over the local process. Liveness answers in
+  about 1 ms and readiness in about 3 ms (it runs a metadata query).
+- **Cancellation.** The bounded path (streamed node by node, with a cancel and deadline check
+  between nodes) costs no more than `invoke`.
+- **Memory.** The API process had a resident set of about 330 MB after these runs (the direct
+  benchmark process: about 290 MB). The container used about 200 MiB (cgroup accounting,
+  `docker stats`). The analytical stack (pandas, statsmodels, DuckDB) dominates both.
+
+Agent time still dominates: the forecast's model selection and backtests take about 320 ms.
+
 ## 11. Known limitations
 
-- **No authentication, rate limiting or TLS.** It is a local development service.
+- **One shared token, no user accounts; no TLS in the process.** Terminate TLS and add user
+  sign-in at a reverse proxy ([deployment.md](deployment.md)).
 - **One run at a time per process.** Throughput is bounded by the agent. A run that exceeds the API
-  timeout keeps its worker until the agent's own limits end it.
-- **Metrics are in-process** and reset on restart. Nothing is persisted, including questions and
-  answers.
+  timeout is cancelled at its next step; a step already running finishes first, within its own
+  tool and SQL timeouts.
+- **Rate limits and metrics are in-process** and reset on restart. Nothing is persisted, including
+  questions and answers.
 - **Progress events report finished graph stages**, not partial answers. With the deterministic
   provider a run takes milliseconds, so progress matters mainly with a network model.
 - **Evidence `input_arguments` are returned as provenance.** For an ad-hoc SQL step that includes

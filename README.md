@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 8 of 9 complete.**
+> **Status: Phase 9 complete: production hardening and deployment readiness.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
@@ -20,7 +20,8 @@ observed facts separate from inference and says when the evidence is insufficien
 | 6 | MCP integration | ✅ |
 | 7 | Evaluation & benchmark suite (89 scenarios, deterministic grading, security, MCP parity) | ✅ |
 | 8 | Product API and UI (FastAPI + Streamlit: typed answers, evidence, charts, trace) | ✅ |
-| 9 | Final QA and portfolio documentation | ⏳ |
+| 9 | Production hardening and deployment (auth, rate limiting, logs, metrics, readiness, bounded runs, Docker, CI) | ✅ |
+| 10 | Final QA and portfolio documentation | ⏳ |
 
 ## The data: Northwind Cloud
 
@@ -135,9 +136,10 @@ Details: [`docs/agent-architecture.md`](docs/agent-architecture.md)
 
 ## Security and reliability
 
-Application-level security controls are implemented for the prototype. This is not
-production-grade security: authentication, multi-tenancy and network exposure come with the
-later phases. The principle is **the model can propose; the application decides.**
+Security is enforced inside the agent (Phase 5) and, since Phase 9, in front of it: bearer-token
+authentication, rate limiting, request limits and safe errors on the API (see
+[Production Setup](#production-setup) and [`docs/security.md`](docs/security.md)). There are no
+user accounts or multi-tenancy. The principle is **the model can propose; the application decides.**
 
 - **Untrusted input.**
   - The question is type- and size-checked, and secrets are redacted before anything sees it.
@@ -167,7 +169,7 @@ later phases. The principle is **the model can propose; the application decides.
 - **Ground truth.** The agent reaches data only through approved tools. A regression suite with a
   Python audit hook shows that no file, process or network access happens during agent runs.
 
-Details: [`docs/security-architecture.md`](docs/security-architecture.md) · threats and residual risks: [`docs/security-threat-model.md`](docs/security-threat-model.md)
+Details: [`docs/security.md`](docs/security.md) (overview) · [`docs/security-architecture.md`](docs/security-architecture.md) · threats and residual risks: [`docs/security-threat-model.md`](docs/security-threat-model.md)
 
 ## MCP server
 
@@ -270,8 +272,11 @@ Everything runs locally with the deterministic offline model: no API key, no net
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"      # everything, including tests; or: pip install -e ".[api,ui]"
-cp .env.example .env         # optional; the defaults work without it
+cp .env.example .env
+echo "API_AUTH_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
 ```
+
+The API requires a bearer token, and the UI reads the same `.env` to send it.
 
 **2. Generate the data** (once, about 30 s): `python -m data.generator.generate` builds
 `database/northwind_cloud.duckdb`.
@@ -279,26 +284,31 @@ cp .env.example .env         # optional; the defaults work without it
 **3. Start the API** (terminal 1):
 
 ```bash
-python -m app.api            # http://127.0.0.1:8000, OpenAPI docs at /docs
+python -m app.api            # http://127.0.0.1:8000, OpenAPI docs at /docs (development)
 ```
 
 **4. Start the UI** (terminal 2):
 
 ```bash
-streamlit run app/ui/main.py # http://localhost:8501
+python -m app.ui             # http://localhost:8501
 ```
+
+Or run both in containers: `docker compose up --build -d` (see [Production Setup](#production-setup)).
 
 **Example request:**
 
 ```bash
+export API_AUTH_TOKEN=...    # the value in .env
 curl -s http://127.0.0.1:8000/api/v1/ask \
+  -H "Authorization: Bearer $API_AUTH_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"question": "What was revenue in July compared with June?"}'
 ```
 
 It returns `outcome: "answered"`, the answer ("Revenue changed by +SGD 40,472 (+0.70%) from
 2026-06 to 2026-07."), both periods, KPI values, claims, evidence with query IDs, the tool trace
-and two chart specs. `GET /api/v1/health` and `GET /api/v1/capabilities` describe the service.
+and two chart specs. `GET /api/v1/health` (liveness) and `GET /api/v1/readiness` are public;
+`GET /api/v1/capabilities` describes what the agent can analyse.
 
 **Try these questions:**
 
@@ -317,7 +327,7 @@ decrease rather than inventing an increase, and shows the June spike flagged by 
 ```
 Streamlit UI (app/ui)        formats and draws; no data access, no calculations
       │ HTTP (JSON)
-FastAPI (app/api)            validation, request IDs, safe errors, progress, chart specs (copied, never recomputed)
+FastAPI (app/api)            bearer auth, rate limit, validation, request IDs, safe errors, logs, metrics, chart specs
       │ AgentRunner.run
 LangGraph agent (app/agent)  understand → validate → plan → execute → evidence → validate → respond → validate
       │ plans of tool calls
@@ -331,9 +341,10 @@ Every question goes through `AgentRunner.run`, so the Phase 5 controls apply unc
 no SQL, tools, file access or settings of its own, and unknown request fields are rejected. No route
 serves files, so the hidden ground truth (`data/seeds/`) is unreachable. Refusals are controlled
 responses (HTTP 200, `outcome: "refused"`) without security internals. Errors are fixed messages
-with a request ID: no stack traces, SQL, paths or secrets. There is no authentication: it is a
-local development service bound to `127.0.0.1`. The API tests repeat the Phase 5/7 attacks over
-HTTP.
+with a request ID: no stack traces, SQL, paths or secrets. Every endpoint except liveness and
+readiness requires the bearer token, and the ask endpoints are rate-limited. The API tests repeat
+the Phase 5/7 attacks over HTTP, including against the authenticated, rate-limited production
+configuration.
 
 **Evidence and provenance.** Every number in an answer comes from an evidence item. Each item is
 produced by a tool call and carries the period, filters, source tables, calculation, query IDs and a
@@ -345,6 +356,115 @@ Anomalies are labelled as statistically unusual, which is not necessarily bad.
 Details: [`docs/api.md`](docs/api.md) (contract, errors, request IDs, security, performance) and
 [`docs/ui.md`](docs/ui.md) (page, refusal handling, testing).
 
+## Production Setup
+
+Phase 9 makes AgentOps deployable without changing its architecture (UI → API → agent → secured
+tools → read-only DuckDB). Full guide: [`docs/deployment.md`](docs/deployment.md). Security model:
+[`docs/security.md`](docs/security.md).
+
+**Environment variables.** Everything is configured through the environment (or `.env`), validated
+at start-up by `app/config.py`. [`.env.example`](.env.example) documents every setting with safe
+placeholders, never real values. The important ones:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `APP_ENV` | `development` | `production` enables strict start-up checks (below) |
+| `API_AUTH_TOKEN` | — | Bearer token, 32+ characters: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `API_AUTH_MODE` | `token` | `disabled` only for local development; refused in production |
+| `API_RATE_LIMIT` | `20/minute` | Per-client limit on `/ask` and `/ask/stream` (`N/second\|minute\|hour`) |
+| `API_CORS_ORIGINS` | empty | Explicit browser origins; empty = none. Never `*` in production |
+| `DATABASE_URL` | `duckdb:///database/northwind_cloud.duckdb` | Must be explicit in production |
+| `API_REQUEST_TIMEOUT_SECONDS` | `150` | Per request; the run is cancelled at the limit (504) |
+| `LOG_FORMAT` / `LOG_LEVEL` | `json` / `INFO` | Structured JSON lines on stderr |
+| `UI_API_URL` | `http://127.0.0.1:8000` | Where the UI calls the API |
+
+**Authentication.** Every `/api/v1` endpoint except `/health` and `/readiness` needs
+`Authorization: Bearer <API_AUTH_TOKEN>`. Missing, malformed and wrong credentials get the same
+401, which reveals nothing. Tokens are compared in constant time and never logged or shown in the
+UI. The UI sends the token from its own environment.
+
+**Rate limiting.** A sliding window per client on the ask endpoints (default 20 requests a
+minute); excess requests get 429 with `Retry-After`. The limiter is in memory and per process,
+which suits the single-process deployment. Bodies are capped at 16 KB (413), the ask endpoints
+accept JSON only (415), questions are capped at 1,000 characters (422), and at most 4 requests
+wait for the agent (503).
+
+**API startup.** `python -m app.api` (`--check-config` validates and exits). With
+`APP_ENV=production` the API refuses to start without:
+
+- a token, and authentication cannot be disabled;
+- a rate limit;
+- an explicit `DATABASE_URL`;
+- HTTPS-only, non-wildcard CORS origins;
+- timeouts that nest (SQL ≤ tool ≤ run ≤ API ≤ UI).
+
+Each problem is listed by setting name, never by value.
+
+**UI startup.** `python -m app.ui` starts Streamlit headless with hardened options: XSRF
+protection, no usage statistics, no uploads, and in production no error details.
+
+**Docker startup.**
+
+```bash
+python -m data.generator.generate      # the database is mounted read-only, never baked into an image
+echo "API_AUTH_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
+docker compose up --build -d           # UI http://127.0.0.1:8501 · API http://127.0.0.1:8000
+API_AUTH_TOKEN=... python scripts/smoke_test.py --api-url http://127.0.0.1:8000 --ui-url http://127.0.0.1:8501
+docker compose stop                    # graceful: in-flight runs finish or are cancelled, exit code 0
+```
+
+Two images from one multi-stage `Dockerfile`:
+
+- **API image:** FastAPI plus the agent.
+- **UI image:** Streamlit and the HTTP client only. It contains no database, agent or data code.
+
+Both images, and the compose stack around them, are hardened:
+
+- Both run as a non-root user (uid 10001), with a read-only root filesystem, no Linux capabilities
+  and `no-new-privileges`.
+- Ports are published on `127.0.0.1` only. Put a TLS-terminating reverse proxy in front for remote
+  users.
+- The images contain no secrets, tests, evaluation code or ground truth.
+
+**Health and readiness.**
+
+- `GET /api/v1/health` is liveness: the process serves HTTP.
+- `GET /api/v1/readiness` answers 200 or 503 with named checks: configuration, database, agent,
+  and accepting requests (it turns 503 while shutting down).
+
+Both are public and contain no internals. The Docker healthcheck uses readiness.
+
+**Logging.** One JSON object per line with timestamp, level, logger, request ID, route, status,
+outcome, error code, durations, and the agent's run ID and tool names. The request ID links the
+response, the API log and the agent's log lines. Never logged: questions, answers, headers,
+tokens, API keys, client addresses, prompts, tool outputs, SQL error text, paths and tracebacks
+(reduced to the exception type).
+
+**Metrics.** `GET /api/v1/metrics` (authenticated) separates the following:
+
+- answered, partial, refused, unsupported and insufficient-evidence outcomes;
+- tool or planning failures;
+- client errors, unauthorised and rate-limited requests;
+- timeouts, unavailability and internal errors.
+
+It also reports p50/p95 request and agent latency and run states (running, stopping, completed,
+refused, failed, timeout, cancelled).
+
+**Security considerations.**
+
+- The API is an entry point to the agent, not a way around it. Every Phase 5 control still
+  applies: injection screening, tool authorization, SQL safety, the data-exposure policy, budgets,
+  deadlines and output validation.
+- One shared service token, not user accounts. Keep the API private and add user sign-in at the
+  proxy.
+- Rotate the token by changing it and restarting.
+- CI (`.github/workflows/ci.yml`) runs:
+  - lint, format, types and the test suite;
+  - the critical benchmark suite;
+  - a Docker build and smoke test.
+
+  It needs no secrets. The full benchmark and the multi-seed check run in `evaluation.yml`.
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -353,13 +473,15 @@ Requires Python 3.11+.
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env              # optional; defaults work without it
+cp .env.example .env
+echo "API_AUTH_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
 
 python -m data.generator.generate # build database/northwind_cloud.duckdb (~30 s)
 pytest                            # full test suite (builds its own datasets)
 python -m evals.run --suite critical  # evaluation regression suite (~12 s)
 python -m app.api                 # API (see "Running AgentOps")
-streamlit run app/ui/main.py      # web UI
+python -m app.ui                  # web UI
+docker compose up --build -d      # or both, in containers (see "Production Setup")
 ```
 
 The test suite needs no API key, LLM, network access, browser or pre-built database. The agent
@@ -370,7 +492,8 @@ app in-process (FastAPI's test client, Streamlit's `AppTest`).
 
 ```
 app/
-  config.py              settings from environment / .env
+  config.py              settings from environment / .env (validated; production start-up rules in app/api/config.py)
+  logs.py                JSON log formatting (redaction, no tracebacks)
   database/              schema metadata (single source of truth), DDL, loader,
                          read-only DuckDB backend, lineage models, data-dictionary renderer
   analytics/             KPI registry + calculation engine (kpis/), periods, dimension allow-list,
@@ -386,9 +509,10 @@ app/
                          data-exposure policy, output guard, budgets, retries, timeouts, redaction, audit events,
                          the secured tool executor shared by the agent and MCP
   mcp/                   MCP server: tool registry, adapters, schemas, error model, audit, stdio entry point
-  api/                   FastAPI app: /ask, /ask/stream, /health, /capabilities, /metrics; schemas, agent service,
-                         presenter and chart specs, error model, request-ID middleware
-  ui/                    Streamlit page, HTTP client, testable view models, rendering
+  api/                   FastAPI app: /ask, /ask/stream, /health, /readiness, /capabilities, /metrics; schemas,
+                         agent service and run tracker, bearer auth and rate limiter, presenter and chart specs,
+                         error model, request-ID and security-header middleware
+  ui/                    Streamlit page, HTTP client, testable view models, rendering, hardened launcher
 evals/                   evaluation harness (not part of the app): scenario datasets, independent references,
                          hidden-label mapping, runners, deterministic graders, metrics, thresholds, reports
 data/
@@ -398,9 +522,16 @@ data/
 database/                DuckDB file (generated, git-ignored)
 docs/                    implementation plan, data dictionary, analytics guide, KPI catalog,
                          forecasting and anomaly-detection guides, agent architecture,
-                         security architecture and threat model, MCP architecture, evaluation, API, UI
+                         security overview, architecture and threat model, MCP architecture, evaluation, API, UI,
+                         deployment
+scripts/smoke_test.py    smoke test for a running deployment (local or docker compose)
 tests/                   unit, integration, security (adversarial, SQL attack, regression), MCP, evaluation,
-                         API (contract, security, streaming, isolation, performance) and UI tests
+                         API (contract, security, production, runtime, streaming, isolation, performance),
+                         UI and deployment tests
+Dockerfile               multi-stage: api and ui images (non-root, no data or secrets)
+docker-compose.yml       the two services, hardened (read-only, no capabilities, localhost ports)
+.github/workflows/       ci.yml (lint, types, tests, critical suite, Docker smoke test); evaluation.yml (full
+                         benchmark, multi-seed)
 ```
 
 ## License
