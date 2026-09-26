@@ -1,12 +1,19 @@
 """Request context for every HTTP request (pure ASGI, so streamed responses pass straight through).
 
-- Request ID: a valid ``X-Request-ID`` header is kept, anything else is replaced by a generated one.
-  A route may replace it with the body's ``request_id``. The final ID is returned in the
-  ``X-Request-ID`` response header, in every error body, and becomes the agent run ID.
-- Body limit: a declared or streamed body above ``API_MAX_REQUEST_BYTES`` is refused with 413.
-- Response headers: ``X-Content-Type-Options: nosniff`` and ``Cache-Control: no-store`` (responses
-  carry business data).
-- One structured log line and the request counters when the response is complete.
+- **Request ID.** A valid ``X-Request-ID`` header (1 to 64 characters from ``A-Za-z0-9._:-``) is kept;
+  anything else, including an oversized value, is replaced by a generated one. A route may replace
+  it with the body's ``request_id``. The final ID is returned in the ``X-Request-ID`` response
+  header and in every error body, and it becomes the agent run ID.
+- **Body limit.** A declared or streamed body above ``API_MAX_REQUEST_BYTES`` is refused with 413.
+- **Security headers** on every response:
+  - ``X-Content-Type-Options: nosniff``;
+  - ``Cache-Control: no-store`` (responses carry business data);
+  - ``Referrer-Policy: no-referrer``;
+  - ``X-Frame-Options: DENY``;
+  - ``Content-Security-Policy: default-src 'none'; frame-ancestors 'none'``. The interactive docs
+    page is the exception, because it loads its own scripts; it is off in production.
+- **One structured log line** and the request counters once the response is complete. The log
+  names the matched route template (``/api/v1/ask``), never the raw path.
 """
 
 from __future__ import annotations
@@ -20,8 +27,16 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.agent.observability import is_valid_run_id, new_run_id
 from app.api.observability import RequestMetrics, log_request
+from app.api.security import RATE_LIMITED_PATHS
 
-MAX_LOGGED_PATH_CHARS = 200
+DOCS_PATHS = frozenset({"/docs", "/docs/oauth2-redirect"})
+STRICT_CSP = "default-src 'none'; frame-ancestors 'none'"
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
 
 
 class BodyTooLarge(HTTPException):
@@ -29,6 +44,13 @@ class BodyTooLarge(HTTPException):
 
     def __init__(self) -> None:
         super().__init__(status_code=413)
+
+
+def _endpoint(scope: Scope) -> str:
+    """The matched route template, or a fixed label (attacker-chosen paths are never logged)."""
+    route = scope.get("route")
+    path = getattr(route, "path", None)
+    return path if isinstance(path, str) else "unmatched"
 
 
 class RequestContextMiddleware:
@@ -47,6 +69,7 @@ class RequestContextMiddleware:
         state: dict[str, Any] = scope.setdefault("state", {})
         state["request_id"] = supplied if supplied and is_valid_run_id(supplied) else new_run_id()
         status = {"code": 500}
+        path = str(scope.get("path", ""))
         self.metrics.started()
 
         declared = headers.get("content-length")
@@ -69,25 +92,31 @@ class RequestContextMiddleware:
                 status["code"] = message["status"]
                 response_headers = MutableHeaders(scope=message)
                 response_headers["X-Request-ID"] = state["request_id"]
-                response_headers["X-Content-Type-Options"] = "nosniff"
-                response_headers["Cache-Control"] = "no-store"
+                for name, value in SECURITY_HEADERS.items():
+                    response_headers[name] = value
+                if path not in DOCS_PATHS:
+                    response_headers["Content-Security-Policy"] = STRICT_CSP
             await send(message)
 
         try:
             await self.app(scope, limited_receive, send_with_context)
         finally:
-            self.metrics.finished(status["code"])
+            duration = round((time.perf_counter() - started) * 1000, 1)
+            error_code = state.get("error_code")
+            self.metrics.finished(
+                status["code"], error_code=error_code, duration_ms=duration, ask=path in RATE_LIMITED_PATHS
+            )
             log_request(
                 state["request_id"],
                 "http_request",
                 method=scope.get("method"),
-                path=str(scope.get("path", ""))[:MAX_LOGGED_PATH_CHARS],
+                endpoint=_endpoint(scope),
                 status_code=status["code"],
-                duration_ms=round((time.perf_counter() - started) * 1000, 1),
+                duration_ms=duration,
                 session_id=state.get("session_id"),
                 agent_status=state.get("agent_status"),
                 outcome=state.get("outcome"),
-                error_code=state.get("error_code"),
+                error_code=error_code,
                 error_type=state.get("error_type"),
                 tool_calls=state.get("tool_calls"),
                 evidence_count=state.get("evidence_count"),
