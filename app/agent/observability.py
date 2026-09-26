@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -44,6 +45,14 @@ _ALLOWED_KEYS = {
     "severity",
     "decision",
 }
+
+
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
+
+
+def is_valid_run_id(value: str) -> bool:
+    """A caller-supplied run ID is a short token: safe in log lines, headers and file names."""
+    return isinstance(value, str) and _RUN_ID.fullmatch(value) is not None
 
 
 def new_run_id() -> str:

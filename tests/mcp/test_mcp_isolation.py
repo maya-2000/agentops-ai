@@ -47,6 +47,7 @@ ALLOWED_APP_IMPORTS = {
     "app.tools.base",
     "app.tools.registry",
     "app.tools.results",
+    "app.tools.views",  # Phase 8: the forecast/anomaly views, shared with the API
 }
 ALLOWED_MCP_SDK = {"mcp", "mcp.types", "mcp.server", "mcp.server.context", "mcp.server.stdio"}
 

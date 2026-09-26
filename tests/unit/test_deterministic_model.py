@@ -51,6 +51,10 @@ def _understand(question: str) -> dict[str, Any]:
         ),
         ("Forecast revenue for the next 3 months", {"intent": "forecast", "metric": "revenue", "horizon": 3}),
         ("What will MRR be next month?", {"intent": "forecast", "metric": "mrr", "horizon": 1}),
+        # Phase 8: an "N-month" forecast names its horizon (it previously fell back to one month).
+        ("What is our 3-month revenue forecast?", {"intent": "forecast", "metric": "revenue", "horizon": 3}),
+        ("Give me a six month MRR outlook", {"intent": "forecast", "metric": "mrr", "horizon": 6}),
+        ("Revenue 2 months ahead", {"intent": "forecast", "metric": "revenue", "horizon": 2}),
         (
             "Were there any unusual movements in revenue last month?",
             {"intent": "anomaly_detection", "metric": "revenue"},

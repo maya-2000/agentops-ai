@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -11,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.config import AgentConfig
 from app.agent.graph import AgentRuntime, build_graph
-from app.agent.observability import new_run_id
+from app.agent.observability import is_valid_run_id, new_run_id
 from app.agent.records import AgentError, AgentStatus, InvestigationPlan, LLMCallRecord, ToolCallRecord
 from app.agent.request import ValidatedRequest
 from app.agent.response import LIMIT_MESSAGE, AgentResponse, failure_response
@@ -27,7 +28,11 @@ from app.security.events import SecurityEvent, Severity, security_event
 from app.security.injection import InjectionScan
 from app.security.redaction import redact
 from app.security.retry import RetryRecord
+from app.tools.base import ToolResult
 from app.tools.registry import ToolRegistry
+
+# Called with a node name each time a graph node finishes (a progress signal; never data).
+ProgressCallback = Callable[[str], None]
 
 
 class AgentRunResult(BaseModel):
@@ -53,6 +58,9 @@ class AgentRunResult(BaseModel):
     budget_usage: BudgetUsage = Field(default_factory=BudgetUsage)
     retries: list[RetryRecord] = Field(default_factory=list)
     input_screen: InjectionScan | None = None
+    # The typed tool results, for in-process consumers only (the API's forecast and anomaly views).
+    # Excluded from serialisation and repr: a raw result can hold fields the evidence layer withholds.
+    tool_results: list[ToolResult] = Field(default_factory=list, exclude=True, repr=False)
 
 
 class AgentRunner:
@@ -78,9 +86,18 @@ class AgentRunner:
         )
         self.graph = build_graph(self.runtime)
 
-    def run(self, question: Any) -> AgentRunResult:
-        """Answer one question. The question is untrusted: it is redacted before it enters the state."""
-        run_id = new_run_id()
+    def run(
+        self, question: Any, *, run_id: str | None = None, on_progress: ProgressCallback | None = None
+    ) -> AgentRunResult:
+        """Answer one question. The question is untrusted: it is redacted before it enters the state.
+
+        ``run_id`` lets a caller correlate the run with its own request ID (for example the API's);
+        it must be a short token of letters, digits and ``._:-``. ``on_progress`` receives each
+        finished graph node's name; without it the graph runs exactly as before (``invoke``).
+        """
+        if run_id is not None and not is_valid_run_id(run_id):
+            raise ValueError("run_id must be 1-64 characters: letters, digits and ._:- (starting alphanumeric)")
+        run_id = run_id or new_run_id()
         clock = time.perf_counter()
         is_text = isinstance(question, str)
         text = question if isinstance(question, str) else ""
@@ -93,7 +110,7 @@ class AgentRunner:
             started_at=datetime.now(UTC),
         )
         try:
-            raw: Any = self.graph.invoke(initial, config={"recursion_limit": self.config.recursion_limit})
+            raw = self._execute(initial, on_progress)
             state = raw if isinstance(raw, AgentState) else AgentState.model_validate(raw)
         except GraphRecursionError:
             stop = security_event(
@@ -137,7 +154,26 @@ class AgentRunner:
             budget_usage=state.budget_usage,
             retries=state.retries,
             input_screen=state.input_screen,
+            tool_results=state.tool_results,
         )
+
+    def _execute(self, initial: AgentState, on_progress: ProgressCallback | None) -> Any:
+        """Run the graph to its end state; stream node updates only when a progress callback is given."""
+        config: Any = {"recursion_limit": self.config.recursion_limit}
+        if on_progress is None:
+            return self.graph.invoke(initial, config=config)
+        final: Any = initial
+        reporting = True
+        for mode, chunk in self.graph.stream(initial, config=config, stream_mode=["updates", "values"]):
+            if mode == "values":
+                final = chunk
+            elif reporting:
+                try:
+                    for node in chunk:
+                        on_progress(node)
+                except Exception:  # progress is advisory: a failing observer never changes the run
+                    reporting = False
+        return final
 
 
 def run_agent(db: Database, question: str, **kwargs: Any) -> AgentRunResult:
