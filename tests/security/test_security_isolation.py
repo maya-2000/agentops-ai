@@ -1,4 +1,4 @@
-"""Static guarantees: no code execution, no filesystem access and no Phase 6+ functionality in the agent path.
+"""Static guarantees: no code execution, no filesystem access, and frameworks confined to their own layers.
 
 The checks parse the source (``ast``), so they find real calls and imports and ignore words inside
 strings, docstrings and regular expressions (the injection screen legitimately names ``eval``).
@@ -160,15 +160,17 @@ def test_os_environ_is_read_only_by_the_redaction_utility() -> None:
     assert sorted(set(readers)) == ["security/redaction.py"]
 
 
-def test_no_phase7_or_later_packages() -> None:
-    # Phase 6 added app/mcp; the MCP SDK may be imported there and nowhere else.
-    for name in ("mcp_server", "api", "ui", "evaluation", "benchmark", "server", "web"):
+def test_frameworks_are_confined_to_their_layers() -> None:
+    # Phase 6 added app/mcp (the MCP SDK); Phase 8 added app/api (FastAPI) and app/ui (Streamlit, which
+    # reaches the API over HTTP). Each framework may be imported in its own package and nowhere else.
+    for name in ("mcp_server", "evaluation", "benchmark", "server", "web"):
         assert not (APP / name).exists(), name
+    homes = {"mcp": "mcp", "fastapi": "api", "starlette": "api", "uvicorn": "api", "streamlit": "ui", "httpx": "ui"}
     for path in ALL_SOURCES:
         roots = {m.split(".")[0] for m in _imports(_tree(path))}
-        assert not roots & {"fastapi", "starlette", "uvicorn", "streamlit", "flask"}, path
-        if "mcp" in roots:
-            assert path.relative_to(APP).parts[0] == "mcp", path
+        assert "flask" not in roots and "django" not in roots, path
+        for root in roots & set(homes):
+            assert path.relative_to(APP).parts[0] == homes[root], (path, root)
 
 
 def test_limits_are_not_hard_coded_in_the_graph() -> None:
