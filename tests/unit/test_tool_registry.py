@@ -197,3 +197,24 @@ def test_tool_result_serialises() -> None:
 
     payload = json.loads(_run(_registry(handler)).model_dump_json())
     assert payload["result"] == {"value": 2.5} and payload["tool_name"] == "get_kpi"
+
+
+@pytest.mark.parametrize(
+    "returned",
+    [
+        "not a result",
+        {"value": 1.0},
+        None,
+        ToolOutput(result="text", status="ok", source_tables=["t"], query_ids=["Q"], calculation="c"),  # type: ignore[arg-type]
+    ],
+    ids=["string", "dict", "none", "untyped_result"],
+)
+def test_a_handler_returning_the_wrong_type_fails_closed(returned: Any) -> None:
+    """Phase 8 regression: a malformed handler output used to crash the whole agent run."""
+
+    def handler(_: ToolContext, __: Any) -> Any:
+        return returned
+
+    result = _run(_registry(handler), {"kpi": "revenue"})
+    assert not result.success and result.result is None and not result.query_ids
+    assert result.error is not None and result.error.code == "invalid_tool_output" and not result.error.retryable
