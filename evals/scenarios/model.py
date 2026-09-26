@@ -95,6 +95,10 @@ Mutation = Literal[
     "missing_provenance",
     "causal_overstatement",
     "tampered_evidence",
+    "mismatched_comparison",
+    "mismatched_dimension",
+    "mismatched_filters",
+    "mismatched_unit",
 ]
 
 
