@@ -59,6 +59,7 @@ addopts = "-ra"
 markers = [
     "full_data: runs against the full generated database (skipped when it has not been built)",
     "slow: tests that generate a medium-sized dataset",
+    "docker: tests that start a container (skipped without a Docker daemon and the built image)",
 ]
 
 [tool.ruff]
