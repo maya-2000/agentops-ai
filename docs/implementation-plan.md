@@ -832,3 +832,22 @@ benchmark (see `docs/evaluation.md` §16); none were hidden or excluded.
 
 No production code reads the injected-event ground truth; only `evals/reference/` does. No
 Phase 8 API/UI or Phase 9 production deployment functionality was implemented.
+
+### Phase 7.1 (evaluation-driven reliability fixes) — complete
+
+A focused reliability iteration before Phase 8. The loop was: benchmark, failure, root cause,
+minimal fix, regression test, full re-run. It fixed the seven failures the Phase 7 benchmark found
+and made claim validation stricter. The `eval_v1` scenarios, expected values, tolerances and
+regression thresholds are unchanged, and no scenario was removed. Details, before/after results and
+the root-cause table: [`docs/phase-7-1-reliability.md`](phase-7-1-reliability.md).
+
+| Area | Change |
+|---|---|
+| Question understanding (`app/llm/deterministic/understanding.py`) | Explicit comparison periods ("July compared with May", "from May to July", ISO months, quarters and whole-period date ranges). "May" as a month vs a verb. Rankings by change vs by level. The "marketing channel" qualifier. "Drop" as a noun vs a write command. Clarification for day-level dates and "smallest change" rankings. |
+| Request validation (`app/agent/request.py`) | A relative comparison ("the previous month") is relative to the asked period. Change rankings are limited to the revenue decomposition. Per-rep questions are limited to rep performance, and other per-rep metrics are answered as unsupported (the data policy is unchanged). |
+| Planner (`app/llm/deterministic/planning.py`) | Change rankings use `decompose_revenue_change`; per-rep questions use `analyze_sales.rep_performance`. |
+| Analytics (`app/analytics/revenue.py`) | The decomposition also names the largest percentage decline and increase. |
+| Evidence and claims (`app/evidence/`, `app/agent/findings.py`) | `ClaimSubject` (the claim's structured identity) and the validator's metric, unit, period, comparison, dimension, member and filter checks; rep-performance evidence; change-ranking and rep-ranking claims; identifiers are not numbers. |
+| Evaluation (`evals/`) | The grader's own claim-subject check. The customer-ID workaround is removed. Four identity corruptions are added for the regression tests; `eval_v1` is unchanged. |
+
+No Phase 8 API/UI or Phase 9 production deployment functionality was implemented.

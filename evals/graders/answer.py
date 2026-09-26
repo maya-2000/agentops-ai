@@ -27,7 +27,9 @@ from app.evidence.models import Claim, Evidence, EvidenceGraph
 from app.evidence.validation import causal_sentences, validate_evidence, validate_response
 from app.llm.schemas import DraftItemOutput, ResponseDraftOutput
 
-CUSTOMER_ID = re.compile(r"\bCUST-\d{6}\b")
+# The identity a claim's structured subject must share with the evidence it restates (checked independently
+# of the production validator, which checks the same contract).
+_SUBJECT_FIELDS = ("metric", "unit", "period_label", "comparison_label", "dimension", "dimension_value", "filters")
 
 
 @dataclass
@@ -135,9 +137,8 @@ def check_answer(
     evidence_check = validate_evidence(graph, successful_call_ids=answer.successful_calls, require_primary=False)
     response_check = validate_response(answer.draft(), graph, answerable=answerable)
     out.validator_errors = [*evidence_check.errors, *response_check.errors]
-    # Digits inside customer identifiers (CUST-002529) are identifiers, not stated numbers.
-    identifiers = " ".join(CUSTOMER_ID.findall(answer.text))
-    out.unsupported_numbers = [n for n in response_check.unsupported_numbers if n not in identifiers]
+    # No grader-side exemption: identifiers (CUST-002529) must be told apart from numbers by the shared rule.
+    out.unsupported_numbers = list(response_check.unsupported_numbers)
 
     for item in answer.items:
         if not _material(item, answer):
@@ -190,6 +191,7 @@ def _item_problems(
             problems.append(f"cites unknown claim {claim_id}")
             continue
         evidence_ids += claim.evidence_ids
+        problems += _subject_problems(claim, answer)
     evidence_ids = list(dict.fromkeys(evidence_ids))
     if not evidence_ids:
         problems.append("states content without citing evidence")
@@ -223,6 +225,27 @@ def _item_problems(
                 problems.append(
                     f"{evidence.evidence_id} covers {sorted(str(x) for x in labels)}, not {sorted(expected_periods)}"
                 )
+    return problems
+
+
+def _subject_problems(claim: Claim, answer: Answer) -> list[str]:
+    """A claim is about what its evidence is about: same metric, unit, periods, dimension, member and filters."""
+    subject = claim.subject
+    if subject is None:
+        return []
+    source = answer.evidence.get(subject.evidence_id)
+    if source is None or subject.evidence_id not in claim.evidence_ids:
+        return [f"{claim.claim_id} does not cite the evidence it is about"]
+    problems = [
+        f"{claim.claim_id} is about {name} {getattr(subject, name)!r}, but {source.evidence_id} reports "
+        f"{getattr(source, name)!r}"
+        for name in _SUBJECT_FIELDS
+        if getattr(subject, name) != getattr(source, name)
+    ]
+    for assertion in claim.numeric_assertions:
+        origin = answer.evidence.get(assertion.evidence_id)
+        if origin is not None and subject.metric and origin.metric and origin.metric != subject.metric:
+            problems.append(f"{claim.claim_id} states a {origin.metric} number as {subject.metric}")
     return problems
 
 

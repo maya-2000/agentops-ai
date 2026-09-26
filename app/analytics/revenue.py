@@ -251,6 +251,8 @@ def decompose_revenue_change(
         "gross_increase": gross_increase,
         "largest_decline": rows[0].dimension_value if rows and rows[0].absolute_change < 0 else None,
         "largest_increase": rows[-1].dimension_value if rows and rows[-1].absolute_change > 0 else None,
+        "largest_percentage_decline": _extreme_percentage(rows, decline=True),
+        "largest_percentage_increase": _extreme_percentage(rows, decline=False),
     }
     return AnalyticsResult[DecompositionRow](
         operation="decompose_revenue_change",
@@ -269,6 +271,16 @@ def decompose_revenue_change(
         ],
         provenance=kpi.provenance,
     )
+
+
+def _extreme_percentage(rows: list[DecompositionRow], *, decline: bool) -> str | None:
+    """The member with the largest percentage decline (or increase); members without a base are skipped."""
+    moved = [r for r in rows if r.percentage_change is not None and (r.percentage_change < 0) == decline]
+    moved = [r for r in moved if r.percentage_change != 0]
+    if not moved:
+        return None
+    pick = min if decline else max
+    return pick(moved, key=lambda r: (r.percentage_change or 0.0, r.dimension_value)).dimension_value
 
 
 def revenue_bridge(

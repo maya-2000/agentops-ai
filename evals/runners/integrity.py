@@ -107,6 +107,38 @@ def _mismatched_metric(answer: Answer) -> Answer:
     return answer
 
 
+def _reidentify(answer: Answer, **update: Any) -> Answer:
+    """Change what the primary claim's evidence is about (re-sealed, so only an identity check can tell)."""
+    evidence_id = _first_evidence(answer)
+    assert evidence_id is not None
+    changed = answer.evidence[evidence_id].model_copy(update={**update, "fingerprint": ""})
+    answer.evidence[evidence_id] = changed.model_copy(update={"fingerprint": changed.compute_fingerprint()})
+    return answer
+
+
+def _mismatched_comparison(answer: Answer) -> Answer:
+    return _reidentify(
+        answer,
+        comparison_label="2019-01",
+        comparison_start=date(2019, 1, 1),
+        comparison_end=date(2019, 1, 31),
+    )
+
+
+def _mismatched_dimension(answer: Answer) -> Answer:
+    return _reidentify(answer, dimension="region", dimension_value="Invented Region")
+
+
+def _mismatched_filters(answer: Answer) -> Answer:
+    old = answer.evidence[_first_evidence(answer) or ""]
+    return _reidentify(answer, filters={**old.filters, "segment": "Invented Segment"})
+
+
+def _mismatched_unit(answer: Answer) -> Answer:
+    old = answer.evidence[_first_evidence(answer) or ""]
+    return _reidentify(answer, unit="days" if old.unit != "days" else "SGD")
+
+
 def _fabricated_number(answer: Answer) -> Answer:
     head = answer.items[0]
     answer.items[0] = Item(
@@ -151,6 +183,11 @@ MUTATORS: dict[str, Callable[[Answer], Answer]] = {
     "missing_provenance": _missing_provenance,
     "causal_overstatement": _causal_overstatement,
     "tampered_evidence": _tampered_evidence,
+    # Phase 7.1 identity corruptions (used by the regression tests; eval_v1 keeps its original nine).
+    "mismatched_comparison": _mismatched_comparison,
+    "mismatched_dimension": _mismatched_dimension,
+    "mismatched_filters": _mismatched_filters,
+    "mismatched_unit": _mismatched_unit,
 }
 
 

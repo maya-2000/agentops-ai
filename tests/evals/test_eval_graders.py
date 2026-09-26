@@ -161,9 +161,9 @@ def test_every_corruption_is_detected_by_the_benchmark(
     base = Answer.from_result(obs.result)
     clean = check_answer(base, approved_relations=eval_ctx.exposure.approved_relations)
     assert not (clean.ungrounded or clean.validator_errors or clean.integrity_errors or clean.unsupported_numbers)
-    assert set(scenario.mutations) == set(MUTATORS)
+    assert set(scenario.mutations) <= set(MUTATORS)
     applied = 0
-    for mutation in scenario.mutations:
+    for mutation in MUTATORS:  # eval_v1's nine corruptions and the Phase 7.1 identity corruptions
         case = mutate(Answer.from_result(obs.result), mutation)
         if not case.applicable:  # e.g. no second numeric evidence item to point a claim at
             assert case.note and mutation == "wrong_evidence", (mutation, case.note)
@@ -183,12 +183,12 @@ def test_every_corruption_is_detected_by_the_benchmark(
             or checks.integrity_errors
         )
         assert by_grader, mutation
-        if mutation != "mismatched_metric":  # a known production-validator gap, reported by the benchmark
-            assert checks.validator_errors or checks.integrity_errors, mutation
+        # Phase 7.1: the production validators check the claim's subject too (no metric-mismatch gap left).
+        assert checks.validator_errors or checks.integrity_errors, mutation
     assert applied >= len(MUTATORS) - 1
 
 
-def test_the_integrity_scenario_reports_the_validator_gap(
+def test_the_integrity_scenario_reports_what_each_layer_detects(
     eval_ctx: EvalContext, scenarios: dict[str, EvaluationScenario]
 ) -> None:
     result = evaluate(scenarios["integrity_kpi_answer"], eval_ctx, EngineConfig())
@@ -198,6 +198,47 @@ def test_the_integrity_scenario_reports_the_validator_gap(
     assert [f.check for f in result.failures] == [f"integrity.{m}.validator" for m in missed]
     assert all(f.category == F.EVIDENCE_ERROR for f in result.failures)
     assert result.scores["evidence"] == pytest.approx((len(outcomes) - len(missed)) / len(outcomes), abs=1e-6)
+    assert outcomes["mismatched_metric"] == {"validator": True, "grader": True}  # the Phase 7 gap, fixed in 7.1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("metric", "mrr"),
+        ("unit", "days"),
+        ("period_label", "2026-07"),
+        ("comparison_label", "2026-06"),
+        ("dimension_value", "APAC"),
+        ("filters", {"segment": "SMB"}),
+    ],
+)
+def test_the_grader_checks_the_claim_subject_independently(
+    kpi_run: AgentObservation, eval_ctx: EvalContext, field: str, value: object
+) -> None:
+    """A claim whose declared subject differs from its evidence is ungrounded for the grader, too."""
+    assert kpi_run.result is not None
+    answer = Answer.from_result(kpi_run.result)
+    head = answer.claims[answer.items[0].claim_ids[0]]
+    assert head.subject is not None
+    answer.claims[head.claim_id] = head.model_copy(update={"subject": head.subject.model_copy(update={field: value})})
+    checks = check_answer(answer, approved_relations=eval_ctx.exposure.approved_relations)
+    assert any(f"is about {field}" in problem for problem in checks.ungrounded), checks.ungrounded
+    assert checks.validator_errors  # and the production validator agrees
+
+
+def test_customer_ids_are_not_numbers_for_the_grader(
+    eval_ctx: EvalContext, scenarios: dict[str, EvaluationScenario]
+) -> None:
+    """No grader-side exemption: the shared number rule tells identifiers apart from numbers."""
+    obs = run_agent(eval_ctx, scenarios["risk_customers_at_risk"], DeterministicLLM)
+    assert obs.result is not None and obs.result.status == "completed"
+    answer = Answer.from_result(obs.result)
+    assert "CUST-" in answer.text
+    assert not check_answer(answer, approved_relations=eval_ctx.exposure.approved_relations).unsupported_numbers
+    head = answer.items[0]
+    answer.items[0] = type(head)(head.section, head.text + " CUST-000001 has a churn risk of 73.4%.", head.claim_ids)
+    fabricated = check_answer(answer, approved_relations=eval_ctx.exposure.approved_relations).unsupported_numbers
+    assert fabricated == ["73.4%"]
 
 
 # ------------------------------------------------------------------ the optional LLM judge
