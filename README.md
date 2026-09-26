@@ -216,21 +216,31 @@ their wording.
 
 Results of the deterministic run (local, synthetic data; not a production claim):
 
-| | |
-|---|---|
-| Scenarios passed | 82 / 89; all regression thresholds pass; critical suite 13 / 13 |
-| Security, injection, SQL, exposure | 32 / 32; 0 security or data-exposure failures |
-| MCP parity | 100% (20 scenarios, 47 calls) |
-| Evidence grounding / hallucinations / unsupported causal claims | 100% / 0% / 0% |
-| Numerical accuracy | 92.3% (36 of 39 reference checks) |
-| Intent / parameter / tool selection | 97.3% / 97.1% / 96.6% |
-| Refusal recall / false refusals | 100% / 2.5% |
-| Multi-seed (seeds 7 and 2027) | 22 / 22 |
+| | Phase 7 | After Phase 7.1 |
+|---|---|---|
+| Scenarios passed | 82 / 89 | 89 / 89 |
+| Security, injection, SQL, exposure | 32 / 32; 0 security or data-exposure failures | 32 / 32; 0 failures |
+| MCP parity | 100% (20 scenarios, 47 calls) | 100% |
+| Evidence grounding / hallucinations / unsupported causal claims | 100% / 0% / 0% | 100% / 0% / 0% |
+| Numerical accuracy | 92.3% (36 of 39 reference checks) | 100% (39 of 39) |
+| Intent / parameter / tool selection | 97.3% / 97.1% / 96.6% | 100% / 100% / 100% |
+| Refusal recall / false refusals | 100% / 2.5% | 100% / 0% |
+| Multi-seed (seeds 7 and 2027) / critical suite | 22 / 22, 13 / 13 | 22 / 22, 13 / 13 |
 
-The seven failures are real agent gaps the benchmark found, reported rather than hidden: a wrong
-comparison month, a level ranking where a change was asked for, a missing channel breakdown, a
-false refusal, a validator that reads customer-ID digits as numbers, and a validator gap on
-claim metrics.
+**Reliability note (Phase 7.1).** The Phase 7 benchmark found seven real failures:
+
+- a wrong comparison month;
+- a level ranking where a change was asked for;
+- a missing channel breakdown;
+- a false refusal of a sales-rep question;
+- a validator that read customer-ID digits as numbers;
+- a validator that did not check a claim's metric against its evidence (two failures).
+
+Each was traced to its root cause, fixed in the layer that owned it, and given a regression test.
+Claims now carry a structured subject (metric, unit, period, comparison, dimension, filters) that
+must match their evidence. The benchmark, its thresholds and the security policy were not changed
+to get there. A full pass means the known failure modes are fixed, not that the agent is reliable
+in general. Details: [`docs/phase-7-1-reliability.md`](docs/phase-7-1-reliability.md).
 
 ```bash
 python -m evals.run                    # full benchmark, deterministic (no key, no network)

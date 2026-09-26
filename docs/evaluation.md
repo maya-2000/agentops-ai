@@ -306,6 +306,38 @@ each corruption the benchmark records whether the **production validators** (Pha
 A corruption missed by the production validators is an EVIDENCE_ERROR. A corruption missed by
 the grader is an UNKNOWN failure of the benchmark itself.
 
+**Claim/evidence matching rules (Phase 7.1).** A number that also appears in some evidence is not
+enough. A claim is supported only by evidence about *the same thing*.
+
+- Each claim carries a structured subject (`ClaimSubject`), set by the claim builders from the
+  evidence the claim restates. The subject records the metric identifier, unit, period, comparison
+  period, dimension, member and filters.
+- The production validator (`validate_evidence`) requires, for every claim:
+  - the claim cites its subject evidence;
+  - that evidence has the same identity on every field: `revenue` is not `mrr`, a 2026-07 value does
+    not support a 2026-08 claim, APAC is not EMEA, `{segment: SMB}` is not the unfiltered total, and
+    hours are not days;
+  - every number the claim asserts comes from evidence about the same metric;
+  - the claim's text does not name a different registered KPI than its subject.
+- `validate_response` rejects a statement that names a registered KPI when none of the claims it cites
+  is about that KPI. "Revenue increased by 5%" citing an MRR claim is rejected even though 5% is in
+  the evidence.
+- Metric identity uses the typed KPI identifiers of the registry, never string similarity.
+  - Names are recognised from the registry's display names and standard abbreviations, longest
+    first. "Net Revenue Retention" is `nrr`, not `revenue`; "Churn Rate - Revenue" is
+    `revenue_churn_rate`.
+  - Ambiguous words ("churn", "tickets", "growth") name no single KPI and are not used.
+  - ARR/MRR, CAC/CLV, logo churn/retention, revenue/pipeline value, ticket volume/resolution time
+    and customer count/ARPU are distinct identifiers.
+- The grader checks the same contract independently (`evals/graders/answer.py`). A claim whose
+  subject differs from its cited evidence makes the answer item ungrounded (EVIDENCE_ERROR).
+- Four identity corruptions test the contract: mismatched comparison period, dimension/member,
+  filters and unit. They are used by the regression tests. `eval_v1` keeps its original nine
+  corruptions, so the benchmark stays comparable across versions.
+- Identifiers are not numbers. `extract_numbers` ignores `CUST-002529`, `EV-00042`, `INV-00731`,
+  `Q-76ade5f37395`, `query_1847` and `run-abc123`, as it already ignored dates and `E1`/`C1`/`T1`.
+  The grader has no exemption of its own for identifiers; it relies on this shared rule.
+
 ## 8. Optional LLM judge
 
 `evals/graders/judge.py` can score **clarity** and **relevance** (1-5, with a short rationale),
@@ -439,6 +471,8 @@ never does. The CLI exits with status 1 when any threshold fails.
 | evidence-integrity detection | >= 0.85 | 0.8819 | the production validators do not check a claim's metric |
 | pass rate | >= 0.92 | 0.9213 | 82 of 89 |
 
+The "Measured" column is the Phase 7 run. Phase 7.1 left every threshold unchanged, and all of its measured values are at or above these; see [Phase 7.1 re-run](#phase-71-re-run).
+
 Composition-dependent thresholds apply to full runs only. A partial run (a suite, a category,
 a single scenario) is checked against the thresholds its metrics measure. The thresholds are
 calibrated for deterministic mode. In LLM mode the same metrics are reported, but against these
@@ -518,18 +552,33 @@ parser's explicit-comparison handling, not the analytics.
 - **Latency is local and indicative.** Timings are measured in-process on one machine with the
   deterministic model. They are not production latency claims, and they include no network or
   model latency.
-- **Known agent gaps (found by this benchmark):** comparisons against a named earlier month,
-  "largest decline by region" answered with a level ranking, a missing channel breakdown for
-  CAC, a sales-rep question refused by a policy-denied plan, a customer-risk answer rejected
-  because the response validator reads customer-ID digits as numbers, and the production
-  validators not checking that a claim's metric matches its evidence.
+- **Agent gaps found by this benchmark, fixed in Phase 7.1:**
+  - comparisons against a named earlier month;
+  - "largest decline by region" answered with a level ranking;
+  - a missing channel breakdown for CAC;
+  - a sales-rep question refused by a policy-denied plan;
+  - a customer-risk answer rejected because the response validator read customer-ID digits as
+    numbers;
+  - the production validators not checking that a claim's metric matches its evidence.
+
+  Root causes, fixes and regression tests are in
+  [`docs/phase-7-1-reliability.md`](phase-7-1-reliability.md).
+- **What 89/89 does not mean.** After Phase 7.1 every `eval_v1` scenario passes. That says the
+  known failure modes are fixed and guarded by regression tests. It does not say the agent is
+  reliable in general. The deterministic understanding step still covers a modest set of
+  phrasings. For example, it asks for clarification instead of answering day-level date ranges
+  that are not whole months, quarters or years, or "the smallest decline". Change rankings exist
+  only for revenue. `eval_v1` should grow (as `eval_v2`) with new failure
+  modes rather than be read as a ceiling.
 
 ---
 
 ## Results of the eval_v1 run
 
 Deterministic mode, repository database (seed 42, business dataset 1.0.0, as of 2026-08-31),
-dataset `eval_v1`. Measured locally. The numbers describe this benchmark, not production.
+dataset `eval_v1`. Measured locally. The numbers describe this benchmark, not production. The
+table below is the Phase 7 run, which is the baseline. For the Phase 7.1 re-run of the same,
+unchanged benchmark, see [below](#phase-71-re-run).
 
 | | Result |
 |---|---|
@@ -570,6 +619,25 @@ p50 58.8 ms per scenario. The whole run (89 scenarios plus the 22 multi-seed run
 datasets) took 38 s of wall time. Resources: 123 tool calls, of which 43 failed (mostly the
 intended rejections in security scenarios), 6 retries, 0 duplicate calls. These figures come
 from one local run (`EVAL-dd2275d164`). They are indicative only and are not production latency.
+
+### Phase 7.1 re-run
+
+After the Phase 7.1 reliability fixes ([`docs/phase-7-1-reliability.md`](phase-7-1-reliability.md)),
+the same `eval_v1` benchmark was re-run. The scenarios, references, tolerances and thresholds are
+unchanged, and the grader is stricter (independent claim-subject check, no identifier workaround).
+
+| | Phase 7 | Phase 7.1 |
+|---|---|---|
+| Scenarios passed | 82 / 89 | 89 / 89 |
+| Intent / parameter / tool selection | 97.3% / 97.1% / 96.6% | 100% / 100% / 100% |
+| Numerical accuracy | 92.3% | 100% |
+| Refusal precision / false refusals | 94.1% / 2.5% | 100% / 0% |
+| Evidence-integrity detection | 88.2% | 100% |
+| Grounding, claim support, hallucination, causality, security, exposure, MCP parity | unchanged (100% / 100% / 0% / 0% / 100% / 0 failures / 100%) | unchanged |
+| Multi-seed / critical suite | 22 / 22, 13 / 13 | 22 / 22, 13 / 13 |
+
+A full pass means the known failure modes are fixed and guarded by regression tests, not that the
+agent is reliable in general (see [Limitations](#16-limitations)).
 
 ## Testing
 
