@@ -24,7 +24,7 @@ LangGraph state machine (app/agent/graph.py) ─ every loop bounded by AgentConf
   ├─ plan_investigation ───► LLM (structured JSON: allow-listed tool calls) → validated against tool schemas
   ├─ execute_tools ────────► ToolRegistry → Phase 2 / Phase 3 services → Database (read-only)
   ├─ collect_evidence ─────► deterministic: Evidence from typed results, Claims from Evidence
-  ├─ validate_evidence ────► deterministic: 10 checks per claim
+  ├─ validate_evidence ────► deterministic: 11 checks per claim
   ├─ generate_response ────► LLM (structured JSON: wording that cites claim IDs)
   ├─ validate_response ────► deterministic: every number, citation, label and causal phrase checked
   ▼
@@ -176,7 +176,9 @@ A `Claim` is what the answer asserts: `claim_id`, `text`, `claim_type`, `evidenc
 `support_status`, `confidence`, `limitations`, `kind` (kpi_value, change, contribution,
 concentration, ranking, forecast, anomaly_summary, association, recommendation, ...), `primary`
 (directly answers the question), `numeric_assertions` (each number and the evidence field it
-comes from), `direction` + `direction_evidence`, and the period the claim is about.
+comes from), `direction` + `direction_evidence`, the period the claim is about, and (since Phase 7.1)
+`subject`. A `ClaimSubject` is the structured identity of the evidence the claim restates: metric
+identifier, unit, period, comparison period, dimension, member and filters.
 
 | Claim type | Allowed wording | Must rest on |
 |---|---|---|
@@ -211,6 +213,12 @@ confidence intervals, and associations are labelled as associations.
 8. There is no causal language (negated forms such as "does not establish that … caused" are allowed).
 9. Evidence that reports `no_data`/`insufficient_*` does not support a fact.
 10. A claim on a truncated SQL result says it is truncated.
+11. The claim is about what its evidence is about (Phase 7.1).
+    - It cites its subject evidence, and that evidence has the same metric identifier, unit, period,
+      comparison period, dimension, member and filters.
+    - Every number it asserts comes from evidence about the same metric.
+    - Its text names no other registered KPI than its subject.
+    - A revenue claim never rests on MRR evidence, even with an equal number.
 
 At least one supported primary claim must answer the question. Unsupported claims are
 removed and the graph is re-validated. The removal is recorded as a warning, and failed tools
@@ -222,9 +230,11 @@ become caveats. If nothing answers the question, the run ends in `insufficient_e
 
 - The answer cites at least one claim, and every section item cites claims that exist and are supported.
 - **Every number** in the text is found in the cited claims' evidence. Display rounding is
-  allowed (for example "SGD 5.75 million" for 5,752,877). Dates, years, quarters, IDs and small
-  structural counts (≤ 24, such as "3 months") are ignored. A number from other, uncited
-  evidence is rejected.
+  allowed (for example "SGD 5.75 million" for 5,752,877). Dates, years, quarters, identifiers
+  (`E1`, `CUST-002529`, `INV-00731`, `Q-…`, `query_1847`) and small structural counts (≤ 24, such as
+  "3 months") are ignored. A number from other, uncited evidence is rejected.
+- A statement that names a registered KPI cites a claim about that KPI. "Revenue increased by 5%"
+  citing a claim about MRR is rejected even when 5% appears in the evidence.
 - No causal statement.
 - A forecast is labelled as a forecast, and an anomaly as statistically unusual or flagged.
 - An inference or recommendation is not presented as a key finding. A recommendation cites a recommendation claim.
@@ -398,7 +408,7 @@ database files itself.
 5. `plan_investigation` (iteration 2, evidence-driven): the most concentrated geographic member
    (rank 1, share ≥ 50%, read from the evidence) is drilled into. The follow-up runs the segment
    decomposition, churn by segment and an MRR anomaly check within that member (3 calls).
-6. `validate_evidence`: 10 checks per claim; one supported primary claim required.
+6. `validate_evidence`: 11 checks per claim; one supported primary claim required.
 7. `generate_response` → `validate_response`: the answer states the change and the
    within-member concentration, with findings, inferences worded as "was concentrated in" /
    "coincided with", two recommendations, and caveats (anomaly flags do not explain causes,
