@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from app.agent.request import ValidatedRequest
 from app.analytics.dimensions import DIMENSIONS
 from app.evidence.formatting import format_percent, format_value
-from app.evidence.models import Claim, ClaimType, Evidence, EvidenceGraph, NumericAssertion
+from app.evidence.models import Claim, ClaimSubject, ClaimType, Evidence, EvidenceGraph, NumericAssertion
 from app.llm.schemas import CHANGE_RANKINGS, Intent
 
 CONCENTRATION_SHARE = 0.5
@@ -96,6 +96,7 @@ class _Builder:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 direction = "increase" if value > 0 else "decrease" if value < 0 else "none"
                 direction_evidence = NumericAssertion(evidence_id=item.evidence_id, field=field, value=float(value))
+        subject_evidence = about if about is not None else items[0] if len(items) == 1 else None
         claim = Claim(
             claim_id=self.graph.next_claim_id(),
             text=text,
@@ -108,6 +109,7 @@ class _Builder:
             direction_evidence=direction_evidence,
             about_period_start=about.period_start if about else None,
             about_period_end=about.period_end if about else None,
+            subject=ClaimSubject.of(subject_evidence) if subject_evidence is not None else None,
             limitations=list(dict.fromkeys(limitations)),
             confidence=confidence,  # type: ignore[arg-type]
         )

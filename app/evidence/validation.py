@@ -10,13 +10,21 @@
 6. an observed fact is backed by observed evidence (anything else must be calculated or inference);
 7. there is no causal language;
 8. evidence reporting insufficient data does not support a claim;
-9. claims resting on truncated SQL results say so.
+9. claims resting on truncated SQL results say so;
+10. the claim is about what its evidence is about: the claim's structured subject has the same metric,
+    unit, period, comparison period, dimension, member and filters as the evidence it restates; every
+    number it asserts comes from evidence about the same metric; and its text does not name a different
+    registered KPI than its subject (a revenue claim never rests on MRR evidence, even with equal numbers).
 
 ``validate_response`` checks the generated draft against the claims (structure, not semantics):
 cited claims exist and are supported, every number in the text appears in the cited evidence,
-there is no causal language, forecasts and anomalies are labelled as such, inferences are not
-presented as findings, truncated results are not presented as complete, and an unsupported request
-gets no fabricated content.
+a statement that names a registered KPI cites a claim about that KPI, there is no causal language,
+forecasts and anomalies are labelled as such, inferences are not presented as findings, truncated
+results are not presented as complete, and an unsupported request gets no fabricated content.
+
+Metric identity uses the typed KPI identifiers of the registry (``revenue``, ``mrr``, ``cac``, ...), never
+string similarity. ``metrics_named`` recognises only the registry's display names and standard
+abbreviations, longest match first, so "Net Revenue Retention" is ``nrr`` and not ``revenue``.
 """
 
 from __future__ import annotations
@@ -67,6 +75,58 @@ _ANOMALY_WORDS = re.compile(r"\b(unusual|anomal\w*|flagged|statistically)\b", re
 _TRUNCATION_WORDS = re.compile(r"\b(truncat\w*|partial|incomplete|first \d+ rows)\b", re.IGNORECASE)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _TOLERANCE = 1e-6
+# Names that identify one registered KPI (display names from the registry and standard abbreviations).
+# Ambiguous words ("churn", "tickets", "growth") are deliberately absent: they name no single KPI.
+_KPI_TERMS: dict[str, tuple[str, ...]] = {
+    "mrr": ("monthly recurring revenue", "mrr"),
+    "arr": ("annual recurring revenue", "arr"),
+    "revenue_growth": ("revenue growth",),
+    "logo_churn_rate": ("churn rate - logo", "logo churn"),
+    "revenue_churn_rate": ("churn rate - revenue", "revenue churn"),
+    "retention_rate": ("retention rate",),
+    "nrr": ("net revenue retention", "nrr"),
+    "cac": ("customer acquisition cost", "cac"),
+    "clv": ("customer lifetime value", "clv", "ltv"),
+    "arpu": ("average revenue per user", "arpu"),
+    "average_order_value": ("average order value", "aov"),
+    "conversion_rate": ("conversion rate",),
+    "pipeline_value": ("pipeline value",),
+    "win_rate": ("win rate",),
+    "sales_cycle": ("sales cycle",),
+    "support_ticket_volume": ("support ticket volume", "ticket volume"),
+    "average_resolution_time": ("average resolution time",),
+    "product_adoption": ("product adoption",),
+    "customer_count": ("active customer count", "customer count"),
+    "revenue": ("revenue",),
+}
+_KPI_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    sorted(
+        (
+            (re.compile(rf"(?<![\w-]){re.escape(term)}(?![\w-])", re.IGNORECASE), key)
+            for key, terms in _KPI_TERMS.items()
+            for term in terms
+        ),
+        key=lambda item: -len(item[0].pattern),
+    )
+)
+
+
+def metrics_named(text: str) -> set[str]:
+    """The registered KPIs a text names (longest name first; a matched span is not re-read by shorter names)."""
+    taken: list[tuple[int, int]] = []
+    found: set[str] = set()
+    for pattern, key in _KPI_PATTERNS:
+        for match in pattern.finditer(text):
+            if any(match.start() < end and start < match.end() for start, end in taken):
+                continue
+            taken.append(match.span())
+            found.add(key)
+    return found
+
+
+def _kpi_subject(claim: Claim) -> str | None:
+    metric = claim.subject.metric if claim.subject is not None else None
+    return metric if metric in _KPI_TERMS else None
 
 
 def causal_sentences(text: str) -> list[str]:
@@ -159,6 +219,7 @@ def _claim_problems(claim: Claim, graph: EvidenceGraph, executed: set[str]) -> l
         problems.append("uses causal language the evidence does not establish")
     for e in evidence:
         problems += _typed_provenance_problems(e)
+    problems += _subject_problems(claim, graph)
     if claim.about_period_start and claim.about_period_end and evidence:
         dated = [e for e in evidence if e.period_start and e.period_end]
         if dated and not any(
@@ -190,6 +251,33 @@ def _claim_problems(claim: Claim, graph: EvidenceGraph, executed: set[str]) -> l
             expected = "increase" if actual > 0 else "decrease" if actual < 0 else "none"
         if expected != claim.direction:
             problems.append(f"direction {claim.direction} contradicts the evidence ({expected})")
+    return problems
+
+
+def _subject_problems(claim: Claim, graph: EvidenceGraph) -> list[str]:
+    """The claim is about what its evidence is about: metric, unit, periods, dimension, member, filters."""
+    subject = claim.subject
+    if subject is None:
+        return []
+    problems: list[str] = []
+    source = graph.evidence.get(subject.evidence_id)
+    if source is None or subject.evidence_id not in claim.evidence_ids:
+        problems.append(f"does not cite the evidence it is about ({subject.evidence_id})")
+    else:
+        problems += [
+            f"is about {field} {claimed!r} but {source.evidence_id} reports {actual!r}"
+            for field, claimed, actual in subject.mismatches(source)
+        ]
+    if subject.metric is not None:
+        assertions = [*claim.numeric_assertions, *([claim.direction_evidence] if claim.direction_evidence else [])]
+        for evidence_id in dict.fromkeys(a.evidence_id for a in assertions):
+            item = graph.evidence.get(evidence_id)
+            if item is not None and item.metric is not None and item.metric != subject.metric:
+                problems.append(f"states a {item.metric} number ({evidence_id}) in a claim about {subject.metric}")
+    kpi = _kpi_subject(claim)
+    named = metrics_named(claim.text)
+    if kpi is not None and named and kpi not in named:
+        problems.append(f"names {', '.join(sorted(named))} but is about {kpi}")
     return problems
 
 
@@ -288,6 +376,12 @@ def _item_problems(
         if not number_is_supported(number, allowed):
             unsupported_numbers.append(number.raw)
             problems.append(f"{section}: number {number.raw!r} does not appear in the cited evidence")
+    cited_kpis = {kpi for c in claims if (kpi := _kpi_subject(c)) is not None}
+    named = metrics_named(text)
+    if cited_kpis and named and not named & cited_kpis:
+        problems.append(
+            f"{section}: names {', '.join(sorted(named))} but cites claims about {', '.join(sorted(cited_kpis))}"
+        )
     if not _causal_supported(claims):
         for sentence in causal_sentences(text):
             problems.append(f"{section}: unsupported causal statement: {sentence[:100]!r}")
