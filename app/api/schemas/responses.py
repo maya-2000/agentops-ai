@@ -157,6 +157,7 @@ class APIErrorDetail(BaseModel):
     message: str
     retryable: bool = False
     issues: list[FieldIssue] = Field(default_factory=list)
+    request_id: str | None = None  # the same ID as the envelope's (so the error object stands alone)
 
 
 class ErrorResponse(BaseModel):
@@ -192,13 +193,18 @@ class ErrorEvent(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    status: Literal["ok", "degraded", "unavailable"]
+    """Liveness: the process is up and serving HTTP. No dependency is checked (see readiness)."""
+
+    status: Literal["ok"] = "ok"
     version: str
-    agent_available: bool
-    database_available: bool
-    dataset_version: str | None = None
-    as_of_date: date | None = None
-    llm_provider: str | None = None
+
+
+class ReadinessResponse(BaseModel):
+    """Readiness: whether requests can be served now. Checks are named booleans, never details."""
+
+    status: Literal["ready", "not_ready"]
+    version: str
+    checks: dict[str, bool]
 
 
 class NamedItem(BaseModel):
@@ -223,6 +229,8 @@ class Limits(BaseModel):
 class CapabilitiesResponse(BaseModel):
     version: str
     schema_version: str = SCHEMA_VERSION
+    dataset_version: str | None = None
+    llm_provider: str | None = None
     as_of_date: date
     data_start: date | None
     data_end: date | None
@@ -238,6 +246,31 @@ class CapabilitiesResponse(BaseModel):
     not_supported: list[str]
 
 
+class LatencyStats(BaseModel):
+    count: int
+    mean_ms: float | None = None
+    p50_ms: float | None = None
+    p95_ms: float | None = None
+    max_ms: float | None = None
+
+
+class MetricsSummary(BaseModel):
+    """Expected agent outcomes, client errors and infrastructure errors, kept apart."""
+
+    answered: int = 0
+    partial: int = 0
+    refused: int = 0
+    unsupported: int = 0
+    insufficient_evidence: int = 0
+    failed: int = 0  # tool or planning failures (a controlled response, but not an answer)
+    client_errors: int = 0  # invalid, empty or oversized requests, wrong content type, unknown routes
+    unauthorized: int = 0
+    rate_limited: int = 0
+    timeouts: int = 0
+    unavailable: int = 0  # busy, agent unavailable, shutting down
+    internal_errors: int = 0
+
+
 class MetricsResponse(BaseModel):
     """In-process counters since start-up (reset on restart; nothing is persisted)."""
 
@@ -246,6 +279,11 @@ class MetricsResponse(BaseModel):
     in_flight: int
     by_outcome: dict[str, int]
     by_status_code: dict[str, int]
+    by_error_code: dict[str, int] = Field(default_factory=dict)
+    summary: MetricsSummary = Field(default_factory=MetricsSummary)
+    request_latency: LatencyStats = Field(default_factory=lambda: LatencyStats(count=0))  # /ask and /ask/stream
+    agent_latency: LatencyStats = Field(default_factory=lambda: LatencyStats(count=0))
+    runs: dict[str, int] = Field(default_factory=dict)  # queued, running, stopping, and how runs ended
     agent_time_ms_avg: float | None
     agent_time_ms_max: float | None
     api_overhead_ms_avg: float | None
