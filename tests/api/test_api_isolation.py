@@ -43,6 +43,7 @@ API_APP_IMPORTS = {
     "app.database",  # get_database (opened once, read-only) and the Database protocol
     "app.evidence.models",  # Claim and Evidence (serialised as is)
     "app.forecasting",  # the ForecastResult type
+    "app.logs",  # JSON log formatting (Phase 9)
     "app.security.redaction",  # log redaction
     "app.timeseries",  # series-metric registry: names and units
     "app.tools",  # ToolRegistry type
@@ -148,7 +149,7 @@ def test_no_hard_coded_business_numbers_in_the_api_or_ui() -> None:
         for member in ("Singapore", "APAC", "EMEA", "Paid Search", "Enterprise"):
             assert member not in code, (path.name, member)
         large = set(re.findall(r"(?<![\w.-])\d[\d_]{3,}(?:\.\d+)?(?![\w-])", code))
-        assert large <= {"1000", "10_000", "1_048_576", "65535", "8000", "8501"}, (path.name, sorted(large))
+        assert large <= {"1000", "10000", "10_000", "1_048_576", "65535", "8000", "8501"}, (path.name, sorted(large))
 
 
 def test_the_ui_talks_to_the_api_over_http_only() -> None:

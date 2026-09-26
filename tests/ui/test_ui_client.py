@@ -61,9 +61,11 @@ def test_connection_and_timeout_failures() -> None:
     assert caught.value.kind == "timeout" and caught.value.retryable
 
 
-def test_an_unavailable_health_body_is_returned_not_raised() -> None:
-    body = {"status": "unavailable", "version": "0.8.0", "agent_available": False, "database_available": False}
-    assert _client(lambda r: httpx.Response(503, json=body)).health()["status"] == "unavailable"
+def test_a_not_ready_readiness_body_is_returned_not_raised() -> None:
+    body = {"status": "not_ready", "version": "0.9.0", "checks": {"database": False, "agent": False}}
+    assert _client(lambda r: httpx.Response(503, json=body)).readiness()["status"] == "not_ready"
+    with pytest.raises(APIFailure):  # any other endpoint's 503 is a failure
+        _client(lambda r: httpx.Response(503, json=body)).capabilities()
 
 
 def test_stream_reports_progress_then_returns_the_result() -> None:
