@@ -1,14 +1,20 @@
-"""``GET /api/v1/health``, ``/api/v1/capabilities`` and ``/api/v1/metrics``.
+"""``GET /api/v1/health``, ``/readiness``, ``/capabilities`` and ``/metrics``.
 
-Health reports readiness from the start-up snapshot plus one metadata query on the shared
-connection (skipped while an agent run holds it); it never runs a business query and never reports
-paths, settings, versions of dependencies or error text. Capabilities list what the agent can
-analyse, from the registries (names and descriptions only: no SQL, schemas or policy internals).
+- ``/health`` (public, liveness): the process is up and serving HTTP. It checks nothing else, so a
+  restart is never triggered by a dependency problem.
+- ``/readiness`` (public): whether requests can be served now. The checks are the configuration
+  (the API does not start without a safe one), the database (a metadata query on the shared
+  connection, skipped while a run holds it), the agent, and whether the service is accepting
+  requests (not shutting down). 200 when ready, 503 when not. Only named booleans are returned:
+  never paths, settings, versions of dependencies or error text.
+- ``/capabilities`` (authenticated): what the agent can analyse, from the registries (names and
+  descriptions only: no SQL, schemas or policy internals), plus the dataset version and as-of date.
+- ``/metrics`` (authenticated): request, outcome, error and run counters, and latency percentiles.
 """
 
 from __future__ import annotations
 
-from typing import Literal, get_args
+from typing import get_args
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -28,6 +34,7 @@ from app.api.schemas.responses import (
     MetricsResponse,
     NamedItem,
     Outcome,
+    ReadinessResponse,
 )
 from app.api.service import AgentService
 from app.timeseries import SERIES_METRICS
@@ -53,30 +60,27 @@ NOT_SUPPORTED = (
 )
 
 
-@router.get("/health", response_model=HealthResponse, summary="Service readiness")
-async def health(request: Request) -> JSONResponse:
+@router.get("/health", response_model=HealthResponse, summary="Liveness (public)")
+async def health() -> HealthResponse:
+    return HealthResponse(version=API_VERSION)
+
+
+@router.get(
+    "/readiness",
+    response_model=ReadinessResponse,
+    summary="Readiness (public)",
+    responses={503: {"model": ReadinessResponse, "description": "Not ready: a named check failed."}},
+)
+async def readiness(request: Request) -> JSONResponse:
     service: AgentService | None = getattr(request.app.state, "service", None)
-    if service is None:
-        body = HealthResponse(
-            status="unavailable", version=API_VERSION, agent_available=False, database_available=False
-        )
-        return JSONResponse(body.model_dump(mode="json"), status_code=503)
-    snapshot = service.snapshot
-    database = service.probe_database()
-    agent = service.available
-    status: Literal["ok", "degraded", "unavailable"] = (
-        "ok" if agent and database else "unavailable" if not agent else "degraded"
+    checks = (
+        service.readiness()
+        if service is not None
+        else {"configuration": True, "database": False, "agent": False, "accepting_requests": False}
     )
-    body = HealthResponse(
-        status=status,
-        version=API_VERSION,
-        agent_available=agent,
-        database_available=database,
-        dataset_version=snapshot.dataset_version,
-        as_of_date=snapshot.as_of_date,
-        llm_provider=snapshot.llm_provider,
-    )
-    return JSONResponse(body.model_dump(mode="json"), status_code=503 if status == "unavailable" else 200)
+    ready = all(checks.values())
+    body = ReadinessResponse(status="ready" if ready else "not_ready", version=API_VERSION, checks=checks)
+    return JSONResponse(body.model_dump(mode="json"), status_code=200 if ready else 503)
 
 
 @router.get("/capabilities", response_model=CapabilitiesResponse, summary="What the agent can analyse")
@@ -88,6 +92,8 @@ async def capabilities(request: Request) -> CapabilitiesResponse:
     series = [NamedItem(key=m.key, name=m.name, unit=m.unit) for m in SERIES_METRICS.values()]
     return CapabilitiesResponse(
         version=API_VERSION,
+        dataset_version=snapshot.dataset_version,
+        llm_provider=snapshot.llm_provider,
         as_of_date=snapshot.as_of_date,
         data_start=snapshot.data_start,
         data_end=snapshot.data_end,
@@ -114,5 +120,9 @@ async def capabilities(request: Request) -> CapabilitiesResponse:
 
 @router.get("/metrics", response_model=MetricsResponse, summary="Request counters since start-up")
 async def metrics(request: Request) -> MetricsResponse:
+    config = getattr(request.app.state, "config", None)
+    if config is not None and not config.metrics_enabled:
+        raise APIError("not_found")
     counters: RequestMetrics = request.app.state.metrics
-    return counters.snapshot()
+    service: AgentService | None = getattr(request.app.state, "service", None)
+    return counters.snapshot(service.runs.snapshot() if service is not None else None)

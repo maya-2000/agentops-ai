@@ -3,9 +3,9 @@
 Agent outcomes are not API errors. A refusal, an unsupported or ambiguous question, insufficient
 evidence, a failed tool or an answer that failed validation is a controlled agent response: HTTP
 200 with ``status``/``outcome`` in the body. API errors are failures to produce such a response:
-a malformed or invalid request, an oversized body, a busy or unavailable agent, a timeout, or an
-internal error. Their messages are fixed strings: never exception text, SQL, paths, environment
-values or secrets.
+a malformed, unauthenticated, rate-limited or invalid request, an oversized body, a busy,
+unavailable or shutting-down service, a timeout, or an internal error. Their messages are fixed
+strings: never exception text, SQL, paths, class names, environment values or secrets.
 """
 
 from __future__ import annotations
@@ -21,10 +21,14 @@ ErrorCode = Literal[
     "empty_question",
     "question_too_long",
     "request_too_large",
+    "unsupported_media_type",
+    "unauthorized",
+    "rate_limited",
     "not_found",
     "method_not_allowed",
     "busy",
     "agent_unavailable",
+    "shutting_down",
     "timeout",
     "internal_error",
 ]
@@ -36,10 +40,14 @@ _ERRORS: dict[str, tuple[int, str, bool]] = {
     "empty_question": (422, "The question is empty. Ask a question about the business data.", False),
     "question_too_long": (422, "The question is longer than the allowed maximum.", False),
     "request_too_large": (413, "The request body is too large.", False),
+    "unsupported_media_type": (415, "Send the request body as application/json.", False),
+    "unauthorized": (401, "Missing or invalid credentials.", False),
+    "rate_limited": (429, "Too many requests. Please wait before asking again.", True),
     "not_found": (404, "The requested resource does not exist.", False),
     "method_not_allowed": (405, "The HTTP method is not allowed for this resource.", False),
     "busy": (503, "The agent is busy with other requests. Please retry shortly.", True),
     "agent_unavailable": (503, "The analysis service is not available.", True),
+    "shutting_down": (503, "The service is shutting down. Please retry shortly.", True),
     "timeout": (504, "The analysis did not finish within the request time limit.", True),
     "internal_error": (500, "An internal error prevented the request from completing.", False),
 }
@@ -49,10 +57,11 @@ RETRY_AFTER_SECONDS = 5
 class APIError(Exception):
     """Raised by the service and routes; rendered by the application's exception handler."""
 
-    def __init__(self, code: ErrorCode, *, issues: Sequence[FieldIssue] = ()):
+    def __init__(self, code: ErrorCode, *, issues: Sequence[FieldIssue] = (), retry_after: int | None = None):
         super().__init__(code)
         self.code: ErrorCode = code
         self.issues = list(issues)
+        self.retry_after = retry_after
 
     @property
     def status_code(self) -> int:
@@ -64,10 +73,14 @@ class APIError(Exception):
         return APIErrorDetail(code=self.code, message=message, retryable=retryable, issues=self.issues)
 
     def response(self, request_id: str) -> ErrorResponse:
-        return ErrorResponse(request_id=request_id, error=self.detail)
+        return ErrorResponse(request_id=request_id, error=self.detail.model_copy(update={"request_id": request_id}))
 
     @property
     def headers(self) -> dict[str, str]:
+        if self.status_code == 401:
+            return {"WWW-Authenticate": "Bearer"}
+        if self.retry_after is not None:
+            return {"Retry-After": str(self.retry_after)}
         return {"Retry-After": str(RETRY_AFTER_SECONDS)} if self.status_code == 503 else {}
 
 

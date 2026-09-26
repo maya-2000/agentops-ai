@@ -8,12 +8,16 @@ service adds nothing to the analysis. It owns:
   (the same rule as the MCP server's lock). A lock also guards the health probe's metadata query;
 - a wall-clock timeout per request (``API_REQUEST_TIMEOUT_SECONDS``, 504 after it) and a bound on
   waiting requests (``API_MAX_PENDING_REQUESTS``, 503 beyond it);
-- a start-up snapshot for the health and capabilities endpoints (dataset version, as-of date,
-  data coverage, provider name).
+- a start-up snapshot for readiness and capabilities (dataset version, as-of date, data coverage,
+  provider name);
+- a ``RunTracker`` (``runs.py``) of queued and running runs, for metrics and graceful shutdown.
 
-A run that exceeds the API timeout cannot be interrupted from outside (Python threads cannot be
-killed); the agent's own limits (``AGENT_MAX_RUN_SECONDS``, per-tool and SQL timeouts, budgets) end
-it, and requests queued behind it wait or time out. That is documented in docs/api.md.
+Bounded execution (Phase 9). Each run gets a cancel event and a deadline: the time left of the
+request's budget when it starts. The agent stops at its next graph node once either fires. Database
+queries are refused after the deadline, and a running query is interrupted at it. A model call waits
+at most until the deadline. When the API answers 504, or a streaming client disconnects, or the
+service shuts down, the run is cancelled rather than left to finish. Only the step in progress
+completes, for example a model fit between queries. The worker is then free for the next request.
 """
 
 from __future__ import annotations
@@ -24,11 +28,25 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
+from app.agent.records import AgentStatus
 from app.agent.runner import AgentRunner, AgentRunResult, ProgressCallback
 from app.api.config import APIConfig
 from app.api.errors import APIError
+from app.api.observability import log_service
+from app.api.runs import LiveRun, RunState, RunTracker
 from app.database import Database, get_database
+
+_RUN_STATES: dict[AgentStatus, RunState] = {
+    "completed": "completed",
+    "insufficient_evidence": "completed",
+    "validation_failure": "completed",
+    "unsupported_request": "refused",
+    "tool_error": "failed",
+    "planning_failure": "failed",
+    "running": "failed",
+}
 
 
 @dataclass(frozen=True)
@@ -60,21 +78,28 @@ class AgentService:
         self._lock = threading.Lock()  # the one database connection: agent runs and the health probe
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agentops-agent")
         self._pending = 0  # changed only on the event loop
+        self.runs = RunTracker()
+        self.draining = False  # set when shutdown starts: new requests get 503, readiness reports not ready
         self.snapshot = self._take_snapshot()
 
     # ------------------------------------------------------------------ construction
     @classmethod
     def from_settings(cls, config: APIConfig | None = None) -> AgentService:
         """Open the configured database read-only and build the runner. A failure leaves the service
-        unavailable (health reports it; /ask answers 503) instead of crashing the process."""
+        unavailable (readiness reports it; /ask answers 503) and is logged with a reason, never a path."""
         config = config or APIConfig.from_settings()
         try:
             db = get_database()
-        except Exception:
+        except FileNotFoundError:
+            log_service("service_unavailable", reason="database_missing", hint="python -m data.generator.generate")
+            return cls(None, None, config)
+        except Exception as exc:
+            log_service("service_unavailable", reason="database_error", error_type=type(exc).__name__)
             return cls(None, None, config)
         try:
             runner = AgentRunner(db)
-        except Exception:
+        except Exception as exc:
+            log_service("service_unavailable", reason="agent_error", error_type=type(exc).__name__)
             db.close()
             return cls(None, None, config)
         return cls(runner, db, config, owns_db=True)
@@ -86,7 +111,8 @@ class AgentService:
         try:
             with self._lock:
                 start, end = runtime.tool_context.kpi_service.coverage()
-        except Exception:
+        except Exception as exc:
+            log_service("service_unavailable", reason="database_error", error_type=type(exc).__name__)
             return ServiceSnapshot(agent_available=False, dataset_version=self._db.dataset_version)
         return ServiceSnapshot(
             agent_available=True,
@@ -99,11 +125,21 @@ class AgentService:
             max_tool_calls=self._runner.config.max_tool_calls,
         )
 
-    def close(self) -> None:
+    def close(self, grace_seconds: float | None = None) -> None:
+        """Graceful shutdown: refuse new work, let live runs finish within the grace period, cancel the
+        rest (they stop at their next step), then release the worker and the database connection."""
+        self.draining = True
+        grace = self.config.shutdown_grace_seconds if grace_seconds is None else grace_seconds
+        if not self.runs.wait_idle(grace):
+            stopped = self.runs.stop_all("cancelled")
+            log_service("shutdown_cancelled_runs", runs=stopped)
+            self.runs.wait_idle(min(max(grace, 1.0), 5.0))
         self._executor.shutdown(wait=False, cancel_futures=True)
-        if self._owns_db and self._db is not None:
-            with self._lock:
+        if self._owns_db and self._db is not None and self._lock.acquire(timeout=max(grace, 1.0)):
+            try:
                 self._db.close()
+            finally:
+                self._lock.release()
 
     # ------------------------------------------------------------------ requests
     @property
@@ -111,7 +147,9 @@ class AgentService:
         return self._runner is not None and self.snapshot.agent_available
 
     def check_capacity(self) -> None:
-        """Raise the API error a new request would get now (unavailable or too many waiting)."""
+        """Raise the API error a new request would get now (shutting down, unavailable, too many waiting)."""
+        if self.draining:
+            raise APIError("shutting_down")
         if not self.available:
             raise APIError("agent_unavailable")
         if self._pending >= self.config.max_pending_requests:
@@ -119,20 +157,45 @@ class AgentService:
 
     async def run(self, question: str, request_id: str, *, on_progress: ProgressCallback | None = None) -> ServiceRun:
         self.check_capacity()
+        live = self.runs.queued(request_id)
         self._pending += 1
+        started = time.monotonic()
         try:
             loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(self._executor, self._run_serialised, question, request_id, on_progress)
-            # On timeout a queued run is cancelled before it starts; a started run finishes in the
-            # background under the agent's own limits and its result is discarded.
-            return await asyncio.wait_for(future, timeout=self.config.request_timeout_seconds)
+            future = loop.run_in_executor(
+                self._executor, self._run_serialised, question, request_id, on_progress, live, started
+            )
+            result = await asyncio.wait_for(future, timeout=self.config.request_timeout_seconds)
+            if result is None:  # cancelled before it started (shutdown)
+                raise APIError("shutting_down")
+            return result
         except TimeoutError:
+            self._abandon(live, "timeout")
             raise APIError("timeout") from None
+        except asyncio.CancelledError:  # the client went away (streaming) or the server is stopping
+            self._abandon(live, "cancelled")
+            raise
         finally:
             self._pending -= 1
 
-    def _run_serialised(self, question: str, request_id: str, on_progress: ProgressCallback | None) -> ServiceRun:
+    def _abandon(self, live: LiveRun, reason: Literal["timeout", "cancelled"]) -> None:
+        """Stop a run nobody will read: a queued run is dropped; a running one stops at its next step."""
+        self.runs.stop(live, reason)
+        if live.state == "queued":
+            self.runs.finished(live, reason)
+
+    def _run_serialised(
+        self,
+        question: str,
+        request_id: str,
+        on_progress: ProgressCallback | None,
+        live: LiveRun,
+        request_started: float,
+    ) -> ServiceRun | None:
         assert self._runner is not None
+        if live.cancel.is_set():
+            self.runs.finished(live, "cancelled")
+            return None
         stages: list[tuple[str, float]] = []
         clock = time.perf_counter()
 
@@ -141,10 +204,24 @@ class AgentService:
             if on_progress is not None:
                 on_progress(node)
 
-        with self._lock:
-            clock = time.perf_counter()  # time the run itself, not the wait for the lock
-            result = self._runner.run(question, run_id=request_id, on_progress=observe)
-        return ServiceRun(result=result, stages=stages)
+        state: RunState = "failed"
+        try:
+            with self._lock:
+                self.runs.running(live)
+                clock = time.perf_counter()  # time the run itself, not the wait for the lock
+                # The run may use what is left of the request's budget after waiting in the queue.
+                remaining = self.config.request_timeout_seconds - (time.monotonic() - request_started)
+                result = self._runner.run(
+                    question,
+                    run_id=request_id,
+                    on_progress=observe,
+                    cancel=live.cancel,
+                    deadline_seconds=max(0.0, remaining),
+                )
+            state = _RUN_STATES.get(result.status, "failed")
+            return ServiceRun(result=result, stages=stages)
+        finally:
+            self.runs.finished(live, state)
 
     def probe_database(self) -> bool:
         """A metadata query on the shared connection, skipped (and reported alive) while a run holds it."""
@@ -159,3 +236,12 @@ class AgentService:
             return False
         finally:
             self._lock.release()
+
+    def readiness(self) -> dict[str, bool]:
+        """What readiness checks (no business query; nothing about paths or settings)."""
+        return {
+            "configuration": True,  # the API does not start with an unsafe configuration
+            "database": self.probe_database(),
+            "agent": self.available,
+            "accepting_requests": not self.draining,
+        }

@@ -455,7 +455,8 @@ Note: the top-level `mcp/` directory name would shadow the `mcp` SDK package whe
 | 6 | MCP server, schemas, docs, tests | Tools listed and callable via MCP client in tests |
 | 7 | 60+ benchmark cases; runner; metrics; report; hallucination suite | Full evaluation executed; report generated from actual run |
 | 8 | FastAPI; Streamlit (7 pages) | API integration tests pass; Streamlit AppTest smoke passes; manual startup verified |
-| 9 | Full QA: pytest, evaluation, ruff, mypy, API health, UI startup; README, docs, business case, demo scenarios; final engineering report | All quality-bar items checked with evidence |
+| 9 | Production hardening and deployment readiness: authentication, rate limiting, safe configuration, structured logs, metrics, health/readiness, bounded runs, graceful shutdown, Docker, CI | Security, API, deployment and benchmark suites pass; Docker smoke test passes |
+| 10 | Full QA: pytest, evaluation, ruff, mypy, API health, UI startup; README, docs, business case, demo scenarios; final engineering report | All quality-bar items checked with evidence |
 
 After each phase: run tests → inspect outputs → fix → update docs → commit and push to `claude/agentops-ai-agent-39zngk`.
 
@@ -887,3 +888,31 @@ Fixes found while building Phase 8, each with a regression test:
 
 The benchmark scenarios, thresholds and security policy are unchanged. No Phase 9 work, deployment,
 authentication or persistence was added.
+
+### Phase 9 (production hardening and deployment readiness) — complete
+
+Phase 9 turns the local prototype into a deployable service without changing the architecture:
+UI → API → LangGraph agent → secured executor → tools → read-only DuckDB. The plan's original Phase 9
+(final QA, business case, engineering report) moves to Phase 10. Details:
+[deployment.md](deployment.md), [security.md](security.md), and the updated [api.md](api.md) and
+[ui.md](ui.md).
+
+| Topic | Implemented | Reason |
+|---|---|---|
+| Configuration | `APP_ENV` (development, test, production) and typed Phase 9 settings in `app/config.py`. Production start-up rules in `app/api/config.py`: a token, rate limiting on, no wildcard or plain-HTTP origin, an explicit `DATABASE_URL`, nested timeouts. `--check-config`; invalid settings reported by name, never by value | Production must not be insecure by default; development stays one `.env` line away |
+| Authentication | Bearer token (`API_AUTH_TOKEN`, 32+ characters), constant-time comparison, uniform 401, public liveness and readiness only; `API_AUTH_MODE=disabled` for development only | One service token is enough for UI → API; user sign-in belongs in the proxy |
+| Rate limiting | Per-client sliding window on `/ask` and `/ask/stream` (default `20/minute`), 429 + `Retry-After`, bounded in-memory state | Single-process deployment: no Redis |
+| Request hardening | JSON-only ask endpoints (415), body limit (413), validated request IDs, security headers (CSP, frame and referrer policy), CORS only for listed origins | Browser and client safety |
+| Errors | One envelope with the request ID; new codes `unauthorized`, `unsupported_media_type`, `rate_limited`, `shutting_down`; refusals stay HTTP 200 | No internals in responses |
+| Observability | JSON log lines for every logger (`app/logs.py`); route templates instead of paths; tracebacks reduced to the exception type; metrics split into outcomes, client errors and infrastructure errors, with p50/p95 latency and run states | Operable without logging content |
+| Health | `/health` is liveness only; `/readiness` (200/503) checks configuration, database, agent and draining | A dependency failure must not trigger restarts |
+| Runs and timeouts | `AgentRunner.run(..., cancel=, deadline_seconds=)`: the graph stops between nodes, DuckDB queries are interrupted at the deadline, model waits are bounded by the time left. The API cancels a run on timeout, client disconnect and shutdown. `app/api/runs.py` tracks live runs and final-state counters | Phase 8 could not stop a started run; it finished in the background |
+| Shutdown | SIGTERM: draining (readiness 503, new asks 503), `API_SHUTDOWN_GRACE_SECONDS` for in-flight runs, then cancellation, executor and database closed, `service_stopped` logged | Clean container stops |
+| UI | Sends the token; readiness and authorisation status in the sidebar; bounded, truncated, redacted session history (`UI_HISTORY_LIMIT`); hardened launcher `python -m app.ui` | The UI stays a thin client |
+| Docker | Multi-stage `Dockerfile` (`api` and `ui` images, uid 10001, allow-list build context), `docker-compose.yml` (read-only, no capabilities, localhost ports, read-only data mount, healthchecks) | No data, secrets or ground truth in images; the UI image cannot open the database |
+| CI | `.github/workflows/ci.yml` (ruff, format, mypy, pytest, critical suite, Docker build and smoke test with graceful-stop check); `evaluation.yml` (full benchmark and multi-seed on main, weekly, on demand) | Deterministic: no secrets or API keys |
+| Date granularity | A single day ("3 March 2026", "March 3", "2026-03-03", "03/04/2026") is recognised and answered with a clarification: KPIs are monthly, quarterly or yearly, so a day's value is not available. Months ("March 2026", "during March", "2026-03") are unchanged | It used to return March's monthly revenue for "revenue on 3 March 2026" |
+
+Not added, by design: user accounts, persistence of questions or runs, a `/runs` endpoint, Redis,
+Postgres, Kubernetes or cloud infrastructure. The benchmark scenarios, thresholds and security
+policy are unchanged.

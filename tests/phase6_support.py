@@ -56,7 +56,10 @@ VALID_CALLS: dict[str, dict[str, Any]] = {
     "agentops_get_customer_risk": {"limit": 5},
     "agentops_forecast_metric": {"metric": "revenue", "horizon": 3},
     "agentops_detect_anomalies": {"metric": "support_ticket_volume"},
-    "agentops_run_safe_sql": {"sql": "SELECT segment, COUNT(*) AS customers FROM customers GROUP BY segment"},
+    # ORDER BY: without it DuckDB may return the groups in a different order on each execution.
+    "agentops_run_safe_sql": {
+        "sql": "SELECT segment, COUNT(*) AS customers FROM customers GROUP BY segment ORDER BY 1"
+    },
 }
 
 

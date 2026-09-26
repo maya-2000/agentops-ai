@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel, Field
@@ -19,7 +20,8 @@ from app.agent.response import LIMIT_MESSAGE, AgentResponse, failure_response
 from app.agent.state import AgentState
 from app.config import get_settings
 from app.database.base import Database
-from app.evidence.models import Claim, Evidence
+from app.database.deadline import execution_deadline
+from app.evidence.models import Claim, Evidence, EvidenceGraph
 from app.llm.base import LLMClient
 from app.llm.factory import create_llm_client
 from app.llm.schemas import UnderstandingOutput
@@ -33,6 +35,16 @@ from app.tools.registry import ToolRegistry
 
 # Called with a node name each time a graph node finishes (a progress signal; never data).
 ProgressCallback = Callable[[str], None]
+StopReason = Literal["cancelled", "deadline_exceeded"]
+
+
+class RunStopped(Exception):
+    """The run was stopped between graph nodes: its caller cancelled it, or its deadline passed."""
+
+    def __init__(self, reason: StopReason, partial: Any):
+        super().__init__(reason)
+        self.reason: StopReason = reason
+        self.partial = partial
 
 
 class AgentRunResult(BaseModel):
@@ -87,13 +99,27 @@ class AgentRunner:
         self.graph = build_graph(self.runtime)
 
     def run(
-        self, question: Any, *, run_id: str | None = None, on_progress: ProgressCallback | None = None
+        self,
+        question: Any,
+        *,
+        run_id: str | None = None,
+        on_progress: ProgressCallback | None = None,
+        cancel: threading.Event | None = None,
+        deadline_seconds: float | None = None,
     ) -> AgentRunResult:
         """Answer one question. The question is untrusted: it is redacted before it enters the state.
 
         ``run_id`` lets a caller correlate the run with its own request ID (for example the API's);
         it must be a short token of letters, digits and ``._:-``. ``on_progress`` receives each
-        finished graph node's name; without it the graph runs exactly as before (``invoke``).
+        finished graph node's name.
+
+        ``cancel`` and ``deadline_seconds`` bound a run from outside (the API's request timeout, a
+        client that went away, shutdown). The run stops at the next graph node once ``cancel`` is set
+        or the deadline passes; every database query started after the deadline is refused, and one
+        running at the deadline is interrupted; a model call waits at most until the deadline. A
+        stopped run ends with the limit response (``insufficient_evidence``) and a ``cancelled`` or
+        ``deadline_exceeded`` error. Without these arguments the graph runs exactly as before
+        (``invoke``).
         """
         if run_id is not None and not is_valid_run_id(run_id):
             raise ValueError("run_id must be 1-64 characters: letters, digits and ._:- (starting alphanumeric)")
@@ -109,9 +135,13 @@ class AgentRunner:
             question_redacted=clean != text,
             started_at=datetime.now(UTC),
         )
+        deadline_at = time.monotonic() + max(0.0, deadline_seconds) if deadline_seconds is not None else None
         try:
-            raw = self._execute(initial, on_progress)
+            with execution_deadline(deadline_seconds):
+                raw = self._execute(initial, on_progress, cancel=cancel, deadline_at=deadline_at)
             state = raw if isinstance(raw, AgentState) else AgentState.model_validate(raw)
+        except RunStopped as stopped:
+            state = _stopped_state(stopped)
         except GraphRecursionError:
             stop = security_event(
                 run_id,
@@ -157,23 +187,78 @@ class AgentRunner:
             tool_results=state.tool_results,
         )
 
-    def _execute(self, initial: AgentState, on_progress: ProgressCallback | None) -> Any:
-        """Run the graph to its end state; stream node updates only when a progress callback is given."""
+    def _execute(
+        self,
+        initial: AgentState,
+        on_progress: ProgressCallback | None,
+        *,
+        cancel: threading.Event | None = None,
+        deadline_at: float | None = None,
+    ) -> Any:
+        """Run the graph to its end state. Streamed (node by node) when a caller observes or bounds the run."""
         config: Any = {"recursion_limit": self.config.recursion_limit}
-        if on_progress is None:
+        if on_progress is None and cancel is None and deadline_at is None:
             return self.graph.invoke(initial, config=config)
         final: Any = initial
-        reporting = True
+        reporting = on_progress is not None
         for mode, chunk in self.graph.stream(initial, config=config, stream_mode=["updates", "values"]):
             if mode == "values":
                 final = chunk
-            elif reporting:
+                reason = _stop_reason(cancel, deadline_at)
+                if reason is not None and _status(final) == "running":  # a finished run is never discarded
+                    raise RunStopped(reason, final)
+            elif reporting and on_progress is not None:
                 try:
                     for node in chunk:
                         on_progress(node)
                 except Exception:  # progress is advisory: a failing observer never changes the run
                     reporting = False
         return final
+
+
+def _stop_reason(cancel: threading.Event | None, deadline_at: float | None) -> StopReason | None:
+    if cancel is not None and cancel.is_set():
+        return "cancelled"
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return "deadline_exceeded"
+    return None
+
+
+def _status(state: Any) -> Any:
+    return state.status if isinstance(state, AgentState) else state.get("status", "running")
+
+
+def _stopped_state(stopped: RunStopped) -> AgentState:
+    """The state reached so far, closed with the limit response (never a partial answer).
+
+    The tool trace is kept, so a caller can see what ran. Claims and evidence are dropped: the run
+    stopped before they were validated, so none of them may be presented as findings.
+    """
+    partial = stopped.partial if isinstance(stopped.partial, AgentState) else AgentState.model_validate(stopped.partial)
+    events = list(partial.security_events)
+    if stopped.reason == "deadline_exceeded":
+        events.append(
+            security_event(
+                partial.run_id,
+                "timeout",
+                Severity.WARNING,
+                component="runner",
+                action="run_deadline",
+                decision="stop",
+                reason="The run deadline passed; the remaining steps were not run.",
+            )
+        )
+    message = "The run was cancelled or reached its deadline before it finished."
+    return partial.model_copy(
+        update={
+            "status": "insufficient_evidence",
+            "response": failure_response("insufficient_evidence", LIMIT_MESSAGE, calls=partial.tool_calls),
+            "errors": [*partial.errors, AgentError(stage="graph", code=stopped.reason, message=message)],
+            "security_events": events,
+            "evidence_graph": EvidenceGraph(),
+            "tool_results": [],
+        }
+    )
 
 
 def run_agent(db: Database, question: str, **kwargs: Any) -> AgentRunResult:

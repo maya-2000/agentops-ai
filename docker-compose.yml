@@ -1,0 +1,65 @@
+# AgentOps on one host: the API (FastAPI + agent) and the UI (Streamlit), UI -> API -> agent.
+#
+# Before the first start:
+#   1. python -m data.generator.generate      builds ./database/northwind_cloud.duckdb and its manifest
+#   2. put API_AUTH_TOKEN in .env              python -c "import secrets; print(secrets.token_urlsafe(32))"
+# Then:  docker compose up --build -d   ->   UI http://127.0.0.1:8501, API http://127.0.0.1:8000
+#
+# Ports are published on 127.0.0.1 only: put a TLS-terminating reverse proxy in front for remote users.
+# The database is mounted read-only into the API only; the UI has no data access at all.
+
+name: agentops
+
+x-hardening: &hardening
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *hardening
+    build:
+      context: .
+      target: api
+    image: agentops-api:0.9.0
+    environment:
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:?Set API_AUTH_TOKEN in .env (see .env.example)}
+      API_RATE_LIMIT: ${API_RATE_LIMIT:-20/minute}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-}
+      API_REQUEST_TIMEOUT_SECONDS: ${API_REQUEST_TIMEOUT_SECONDS:-150}
+      API_SHUTDOWN_GRACE_SECONDS: ${API_SHUTDOWN_GRACE_SECONDS:-10}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deterministic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./database:/data/database:ro
+      - ./data/metadata:/data/metadata:ro
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    stop_grace_period: 20s
+
+  ui:
+    <<: *hardening
+    build:
+      context: .
+      target: ui
+    image: agentops-ui:0.9.0
+    environment:
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:?Set API_AUTH_TOKEN in .env (see .env.example)}
+      UI_API_URL: http://api:8000
+      UI_REQUEST_TIMEOUT_SECONDS: ${UI_REQUEST_TIMEOUT_SECONDS:-180}
+      UI_HISTORY_LIMIT: ${UI_HISTORY_LIMIT:-20}
+    tmpfs:
+      - /tmp
+      - /home/agentops:uid=10001,gid=10001,mode=0700  # Streamlit's per-user state; the root fs is read-only
+    ports:
+      - "127.0.0.1:${UI_PORT:-8501}:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    stop_grace_period: 10s

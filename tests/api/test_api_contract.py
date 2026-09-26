@@ -22,7 +22,7 @@ from app.api.schemas import AskResponse
 from app.api.service import AgentService
 from app.tools import handlers
 from tests.phase5_support import raising, with_handler
-from tests.phase8_support import ASK, CAPABILITIES, HEALTH, METRICS, STREAM, api_client, api_config, ask
+from tests.phase8_support import ASK, CAPABILITIES, HEALTH, METRICS, READINESS, STREAM, api_client, api_config, ask
 
 REVENUE = "What was revenue last month?"
 COMPARISON = "What was revenue in August 2026 compared with July 2026?"
@@ -62,34 +62,30 @@ def _no_recomputation(data: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------------------- health, capabilities
 
 
-def test_health_is_small_and_reports_readiness(client: Any) -> None:
-    response = client.get(HEALTH)
-    assert response.status_code == 200
-    body = response.json()
-    assert set(body) == {
-        "status",
-        "version",
-        "agent_available",
-        "database_available",
-        "dataset_version",
-        "as_of_date",
-        "llm_provider",
-    }
-    assert body["status"] == "ok" and body["agent_available"] and body["database_available"]
-    assert body["version"] == API_VERSION and body["as_of_date"] == "2026-08-31"
-    text = response.text.lower()
-    for detail in ("duckdb", "/home", ".duckdb", "database_url", "api_key", "path"):
-        assert detail not in text
+def test_health_is_liveness_and_readiness_reports_dependencies(client: Any) -> None:
+    # Phase 9 split: /health is liveness (the process serves HTTP); /readiness checks the dependencies.
+    live = client.get(HEALTH)
+    assert live.status_code == 200 and live.json() == {"status": "ok", "version": API_VERSION}
+    ready = client.get(READINESS)
+    assert ready.status_code == 200
+    body = ready.json()
+    assert body["status"] == "ready" and body["version"] == API_VERSION
+    assert body["checks"] == {"configuration": True, "database": True, "agent": True, "accepting_requests": True}
+    for response in (live, ready):
+        text = response.text.lower()
+        for detail in ("duckdb", "/home", ".duckdb", "database_url", "api_key", "path", "token"):
+            assert detail not in text
 
 
-def test_health_reports_an_unavailable_agent_with_503() -> None:
+def test_readiness_reports_an_unavailable_agent_with_503() -> None:
     from fastapi.testclient import TestClient
 
     service = AgentService(None, None, api_config())
     with TestClient(create_app(service)) as c:
-        response = c.get(HEALTH)
-        assert response.status_code == 503
-        assert response.json()["status"] == "unavailable" and not response.json()["agent_available"]
+        assert c.get(HEALTH).status_code == 200  # the process is alive
+        response = c.get(READINESS)
+        assert response.status_code == 503 and response.json()["status"] == "not_ready"
+        assert response.json()["checks"]["agent"] is False and response.json()["checks"]["database"] is False
         _error(c.post(ASK, json={"question": REVENUE}), 503, "agent_unavailable")
         assert c.post(ASK, json={"question": REVENUE}).headers["retry-after"]
     service.close()

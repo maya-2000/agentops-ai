@@ -3,7 +3,9 @@
 The page sends each question to the AgentOps API (``UI_API_URL``) and renders the response: the
 answer, typed findings, KPI cards, charts, forecast and anomaly details, evidence and provenance,
 and the analysis trace. It never touches the database or the agent directly. Questions and answers
-of the current browser session are kept in memory (``st.session_state``) only; nothing is stored.
+of the current browser session are kept in memory (``st.session_state``, at most
+``UI_HISTORY_LIMIT``) only; nothing is stored. Requests carry ``API_AUTH_TOKEN`` when it is set;
+the token is never shown. Start it with ``python -m app.ui`` (``app/ui/__main__.py``).
 """
 
 from __future__ import annotations
@@ -32,28 +34,29 @@ EXAMPLES = (
     "Which acquisition channel has the highest CAC?",
     "Are there any unusual customer or product trends?",
 )
-MAX_HISTORY = 20
 
 
 def _client() -> AgentOpsClient:
     settings = get_settings()
-    return AgentOpsClient(settings.ui_api_url, timeout=settings.ui_request_timeout_seconds)
+    token = settings.api_auth_token.get_secret_value() if settings.api_auth_token else None
+    return AgentOpsClient(settings.ui_api_url, timeout=settings.ui_request_timeout_seconds, token=token)
 
 
 @st.cache_data(ttl=10, show_spinner=False)
-def _health(base_url: str) -> dict[str, Any] | None:
+def _readiness(base_url: str) -> dict[str, Any] | None:
     try:
-        return _client().health()
+        return _client().readiness()
     except APIFailure:
         return None
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _capabilities(base_url: str) -> dict[str, Any] | None:
+def _capabilities(base_url: str) -> tuple[dict[str, Any] | None, str | None]:
+    """(capabilities, None) or (None, the failure code), e.g. "unauthorized" when the token is wrong."""
     try:
-        return _client().capabilities()
-    except APIFailure:
-        return None
+        return _client().capabilities(), None
+    except APIFailure as failure:
+        return None, failure.code or failure.kind
 
 
 def _init_state() -> None:
@@ -73,24 +76,33 @@ def _clear_history() -> None:
     st.session_state.current = None
 
 
-def _sidebar(client: AgentOpsClient) -> None:
+def _sidebar(client: AgentOpsClient, capabilities: dict[str, Any] | None, problem: str | None) -> None:
     with st.sidebar:
         st.markdown("### Service")
-        health = _health(client.base_url)
-        if health is None:
+        ready = _readiness(client.base_url)
+        if ready is None:
             st.error("API not reachable")
             st.caption(f"Expected at {client.base_url}. Start it with `python -m app.api`.")
-        elif health.get("status") == "ok":
+        elif ready.get("status") == "ready":
             st.success("API ready")
         else:
-            st.warning(f"API {health.get('status', 'unavailable')}")
-        if health:
+            st.warning("API not ready")
+            failed = [name.replace("_", " ") for name, ok in (ready.get("checks") or {}).items() if not ok]
+            if failed:
+                st.caption("Not ready: " + ", ".join(failed) + ".")
+        if problem == "unauthorized":
+            st.error("The UI is not authorised to call the API. Set the same API_AUTH_TOKEN for the UI and the API.")
+        if capabilities:
             st.caption(
-                f"Data as of {health.get('as_of_date') or '—'} · dataset {health.get('dataset_version') or '—'} · "
-                f"model provider {health.get('llm_provider') or '—'} · API {health.get('version', '')}"
+                f"Data as of {capabilities.get('as_of_date') or '—'} · dataset "
+                f"{capabilities.get('dataset_version') or '—'} · model provider "
+                f"{capabilities.get('llm_provider') or '—'} · API {capabilities.get('version', '')}"
             )
         st.markdown("### Session")
-        st.caption("Questions and answers are kept in this browser session only.")
+        st.caption(
+            f"The last {get_settings().ui_history_limit} questions and answers are kept in this browser session "
+            "only; nothing is stored."
+        )
         st.button("Clear history", on_click=_clear_history, disabled=not st.session_state.history)
 
 
@@ -110,7 +122,7 @@ def _ask(client: AgentOpsClient, question: str) -> None:
             current["failure"] = failure
             status.update(label="The request could not be completed", state="error")
     entry = vm.history_entry(question, response=current["response"], failure=current["failure"])
-    st.session_state.history = [entry, *st.session_state.history][:MAX_HISTORY]
+    st.session_state.history = vm.bounded_history(st.session_state.history, entry, get_settings().ui_history_limit)
     st.session_state.current = current
 
 
@@ -118,13 +130,13 @@ def main() -> None:
     st.set_page_config(page_title=TITLE, page_icon=":material/insights:", layout="wide")
     _init_state()
     client = _client()
-    _sidebar(client)
+    capabilities, problem = _capabilities(client.base_url)
+    _sidebar(client, capabilities, problem)
 
     st.title(TITLE)
     st.markdown(f"##### {TAGLINE}")
     st.caption(DESCRIPTION)
 
-    capabilities = _capabilities(client.base_url)
     limits = (capabilities or {}).get("limits") or {}
     with st.form("ask", border=False):
         st.text_area(

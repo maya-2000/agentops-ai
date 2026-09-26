@@ -4,6 +4,10 @@ The UI never opens the database, never imports the agent, tools or analytics, an
 files. It sends the question to the API and renders the JSON it gets back. Failures become an
 ``APIFailure`` with a short, user-facing message; response bodies of failed requests are only
 read for the API's own error envelope (code, message, request ID).
+
+Authentication (Phase 9): the client sends ``Authorization: Bearer <API_AUTH_TOKEN>`` when a token
+is configured. The token lives only in this object's private attribute: it is not shown on the
+page, not stored in session state, and not part of ``repr``.
 """
 
 from __future__ import annotations
@@ -57,13 +61,26 @@ def _failure_from(body: Any, status_code: int, request_id: str | None) -> APIFai
 
 
 class AgentOpsClient:
-    def __init__(self, base_url: str, *, timeout: float, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout: float,
+        token: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._transport = transport  # tests pass an httpx.MockTransport
 
+    def __repr__(self) -> str:
+        return f"AgentOpsClient(base_url={self.base_url!r}, authenticated={bool(self._headers)})"
+
     def _client(self, timeout: float | None = None) -> httpx.Client:
-        return httpx.Client(base_url=self.base_url, timeout=timeout or self.timeout, transport=self._transport)
+        return httpx.Client(
+            base_url=self.base_url, timeout=timeout or self.timeout, transport=self._transport, headers=self._headers
+        )
 
     def _request(self, method: str, path: str, *, timeout: float | None = None, **kwargs: Any) -> dict[str, Any]:
         try:
@@ -79,7 +96,8 @@ class AgentOpsClient:
             body = response.json()
         except ValueError:
             body = None
-        if response.status_code >= 400 and not (path == "/health" and isinstance(body, dict) and "status" in body):
+        # Readiness answers 503 with a regular body when not ready: that is a status, not a failure.
+        if response.status_code >= 400 and not (path == "/readiness" and isinstance(body, dict) and "status" in body):
             raise _failure_from(body, response.status_code, response.headers.get("x-request-id"))
         if not isinstance(body, dict):
             raise APIFailure("protocol", "The API returned an unexpected response.", status_code=response.status_code)
@@ -88,6 +106,9 @@ class AgentOpsClient:
     # ------------------------------------------------------------------ endpoints
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health", timeout=5.0)
+
+    def readiness(self) -> dict[str, Any]:
+        return self._request("GET", "/readiness", timeout=5.0)
 
     def capabilities(self) -> dict[str, Any]:
         return self._request("GET", "/capabilities", timeout=10.0)
