@@ -40,9 +40,13 @@ a B2B SaaS company. Classify the user's question into one of the listed intents 
 metric, period, comparison period, dimensions, filters and forecast horizon using ONLY the
 vocabulary in the business context. Relative periods ("last month") are resolved later against the
 business as-of date: keep them as period specs such as last_month, previous_month, last_quarter,
-trailing_3_months, ytd, YYYY-MM, YYYY-Qn or YYYY. Use intent "unsupported" for anything outside the
-Northwind Cloud dataset (for example stock prices, weather, other companies) or any request to change
-data. Set material_ambiguity only when a reasonable default would change the answer.
+trailing_3_months, ytd, YYYY-MM, YYYY-Qn or YYYY. A comparison period the user names ("July compared
+with May") is the comparison_period; "the previous month" as a comparison is previous_month. Rankings
+of levels ("which region had the most revenue") use analysis_type highest or lowest; rankings of change
+("which region had the largest revenue decline") use largest_decrease or largest_increase, and
+largest_pct_decrease or largest_pct_increase when the change is a percentage. Use intent "unsupported"
+for anything outside the Northwind Cloud dataset (for example stock prices, weather, other companies)
+or any request to change data. Set material_ambiguity only when a reasonable default would change the answer.
 
 {_GROUND_RULES}"""
 

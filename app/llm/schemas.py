@@ -30,17 +30,43 @@ class Intent(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
-AnalysisType = Literal["value", "change", "contribution", "highest", "lowest", "trend", "causal", "risk", "cohort"]
+AnalysisType = Literal[
+    "value",
+    "change",
+    "contribution",
+    "highest",
+    "lowest",
+    "largest_decrease",
+    "largest_increase",
+    "largest_pct_decrease",
+    "largest_pct_increase",
+    "trend",
+    "causal",
+    "risk",
+    "cohort",
+]
 ANALYSIS_TYPES: tuple[str, ...] = (
     "value",
     "change",
     "contribution",
     "highest",
     "lowest",
+    "largest_decrease",
+    "largest_increase",
+    "largest_pct_decrease",
+    "largest_pct_increase",
     "trend",
     "causal",
     "risk",
     "cohort",
+)
+# Rankings of members by their *change* between two periods ("which region had the largest decline"),
+# as opposed to "highest"/"lowest", which rank levels ("which region had the most revenue").
+CHANGE_RANKINGS: tuple[str, ...] = (
+    "largest_decrease",
+    "largest_increase",
+    "largest_pct_decrease",
+    "largest_pct_increase",
 )
 
 

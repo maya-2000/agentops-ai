@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.llm.schemas import Intent, PlanOutput, PlanStepOutput
+from app.llm.schemas import CHANGE_RANKINGS, Intent, PlanOutput, PlanStepOutput
 
 CONCENTRATION_SHARE = 0.5  # same rule as the claim builders
 DEFAULT_ANOMALY_METRICS = ("revenue", "mrr", "customer_count", "support_ticket_volume")
@@ -66,6 +66,21 @@ def _initial(request: dict[str, Any]) -> list[PlanStepOutput]:
     period, comparison = _period(request), _comparison(request)
     analysis = request.get("analysis_type")
 
+    if "sales_rep" in dimensions and intent in (
+        Intent.KPI_LOOKUP,
+        Intent.DIMENSIONAL_COMPARISON,
+        Intent.SALES_ANALYSIS,
+    ):
+        # Individual reps are exposed only through rep performance (the Phase 5 data policy).
+        return [
+            _step(
+                "analyze_sales",
+                "Win rate per rep against the team median (reps with enough closed deals are ranked).",
+                operation="rep_performance",
+                filters=filters,
+                **period,
+            )
+        ]
     if intent == Intent.KPI_LOOKUP:
         return [
             _step(
@@ -81,7 +96,7 @@ def _initial(request: dict[str, Any]) -> list[PlanStepOutput]:
         return _comparison_steps(metric, filters, period, comparison)
     if intent == Intent.DIMENSIONAL_COMPARISON:
         dimension = dimensions[0] if dimensions else "segment"
-        if analysis == "contribution" and metric in (None, "revenue"):
+        if (analysis == "contribution" or analysis in CHANGE_RANKINGS) and metric in (None, "revenue"):
             return [
                 _step(
                     "analyze_revenue",

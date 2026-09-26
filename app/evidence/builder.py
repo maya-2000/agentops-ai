@@ -294,6 +294,9 @@ def _revenue_change(c: _Collector, r: AnalyticsResult[Any]) -> None:
         )
 
 
+_NAMED_MEMBERS = ("largest_decline", "largest_increase", "largest_percentage_decline", "largest_percentage_increase")
+
+
 def _decomposition(c: _Collector, r: AnalyticsResult[Any]) -> None:
     if _no_result(c, r):
         return
@@ -321,11 +324,16 @@ def _decomposition(c: _Collector, r: AnalyticsResult[Any]) -> None:
         details={
             "largest_decline": s.get("largest_decline"),
             "largest_increase": s.get("largest_increase"),
+            "largest_percentage_decline": s.get("largest_percentage_decline"),
+            "largest_percentage_increase": s.get("largest_percentage_increase"),
             "reconciled": s.get("reconciled"),
         },
     )
     rows = sorted(r.data, key=lambda row: row.absolute_change if total < 0 else -row.absolute_change)
-    for rank, row in enumerate(rows[:MAX_ROWS_PER_RESULT], start=1):
+    named = {s.get(k) for k in _NAMED_MEMBERS} - {None}  # the analytics layer's extremes are always kept
+    for rank, row in enumerate(rows, start=1):
+        if rank > MAX_ROWS_PER_RESULT and row.dimension_value not in named:
+            continue
         share_key = "share_of_gross_decline" if row.absolute_change < 0 else "share_of_gross_increase"
         share = getattr(row, share_key)
         share_text = (
@@ -550,6 +558,70 @@ def _grouped_rows(c: _Collector, r: AnalyticsResult[Any]) -> None:
         )
 
 
+REP_EXTREMES = 4  # rep_performance: the best- and worst-ranked reps kept as evidence (each side)
+
+
+def _rep_performance(c: _Collector, r: AnalyticsResult[Any]) -> None:
+    """Per-rep win rates as ranked by the analytics layer (only reps with a sufficient sample are ranked)."""
+    if _no_result(c, r):
+        return
+    s = r.summary
+    compared = int(_num(s.get("reps_compared")) or 0)
+    minimum = int(_num(s.get("min_closed")) or 0)
+    median = _num(s.get("team_median_win_rate"))
+    median_text = f"; team median win rate {format_percent(median)}" if median is not None else ""
+    c.add(
+        "calculated",
+        f"Rep performance{_for(r.period)}{_filters_text(r.filters)}: {compared} of {len(r.data)} sales reps had at "
+        f"least {minimum} closed opportunities and were compared{median_text}.",
+        period=r.period,
+        value=median,
+        unit="ratio",
+        metric="win_rate",
+        filters=r.filters,
+        dimension="sales_rep",
+        attributes={
+            "reps_compared": compared,
+            "reps_total": len(r.data),
+            "min_closed": minimum,
+            "team_median_win_rate": median,
+        },
+    )
+    ranked = sorted((row for row in r.data if row.rank is not None), key=lambda row: row.rank)
+    kept = ranked[:REP_EXTREMES] + [row for row in ranked[-REP_EXTREMES:] if row not in ranked[:REP_EXTREMES]]
+    for row in kept:
+        interval = (
+            f" (95% interval {format_percent(row.win_rate_ci_low)} to {format_percent(row.win_rate_ci_high)})"
+            if row.win_rate_ci_low is not None and row.win_rate_ci_high is not None
+            else ""
+        )
+        c.add(
+            "calculated",
+            f"Sales rep {row.sales_rep}{_for(r.period)}{_filters_text(r.filters)}: win rate "
+            f"{format_percent(row.win_rate)}{interval} from {row.closed_opportunities:,} closed opportunities "
+            f"({row.wins:,} won); rank {row.rank} of {compared} compared.",
+            period=r.period,
+            value=row.win_rate,
+            unit="ratio",
+            metric="win_rate",
+            filters=r.filters,
+            dimension="sales_rep",
+            dimension_value=row.sales_rep,
+            attributes={
+                "rank": row.rank,
+                "reps_compared": compared,
+                "closed_opportunities": row.closed_opportunities,
+                "wins": row.wins,
+                "losses": row.losses,
+                "win_rate_ci_low": row.win_rate_ci_low,
+                "win_rate_ci_high": row.win_rate_ci_high,
+                "team_median_win_rate": row.team_median_win_rate,
+                "difference_from_team_median": row.difference_from_team_median,
+            },
+            details={"observation": row.observation, "interval_confidence_level": 0.95},
+        )
+
+
 _OPERATION_NAMES = {"get_customer_risk": "Customer risk", "get_cohort_analysis": "Cohort retention"}
 
 
@@ -619,6 +691,7 @@ _ANALYTICS: dict[str, _Extractor] = {
     "support_volume_change": _support_change,
     "support_by_dimension": _grouped_rows,
     "sales_performance": _grouped_rows,
+    "rep_performance": _rep_performance,
     "channel_performance": _grouped_rows,
     "feature_adoption": _grouped_rows,
     "get_customer_risk": _risk,

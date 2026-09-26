@@ -23,8 +23,9 @@ from app.analytics.dimensions import DIMENSIONS, Filters
 from app.analytics.errors import InvalidFilterValueError, InvalidPeriodError, UnsupportedDimensionError
 from app.analytics.kpis import KPI_KEYS, KPI_REGISTRY
 from app.analytics.periods import Period, previous_period, resolve_period
+from app.analytics.revenue import DECOMPOSITION_DIMENSIONS
 from app.forecasting.config import SUPPORTED_HORIZONS
-from app.llm.schemas import Intent, UnderstandingOutput
+from app.llm.schemas import CHANGE_RANKINGS, Intent, UnderstandingOutput
 from app.security.validators import check_dimension, check_filters, check_horizon, check_kpi, check_series_metric
 from app.timeseries.metrics import SERIES_METRIC_KEYS
 
@@ -39,6 +40,7 @@ _CHANGE_INTENTS = (
     Intent.MIXED_INVESTIGATION,
 )
 _METRIC_REQUIRED = (Intent.KPI_LOOKUP, Intent.PERIOD_COMPARISON, Intent.FORECAST)
+_RELATIVE_COMPARISONS = {"previous_month": 1, "previous_quarter": 3}
 
 
 class ValidatedRequest(BaseModel):
@@ -95,6 +97,41 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
                 outcome="unsupported",
                 message=f"The dimension {dimension!r} is not supported. Supported: {', '.join(DIMENSIONS)}.",
             )
+    if u.analysis_type in CHANGE_RANKINGS:
+        # Members ranked by their change come from the revenue decomposition, the analytics layer's only
+        # per-member change calculation. A level ranking must never stand in for a change ranking.
+        if metric is None:
+            metric = "revenue"
+            assumptions.append("No metric given; ranking the change in revenue.")
+        ranked_by = u.dimensions[0] if u.dimensions else None
+        if metric != "revenue" or ranked_by not in DECOMPOSITION_DIMENSIONS:
+            return RequestValidation(
+                outcome="unsupported",
+                message=(
+                    "Ranking members by their change between two periods is available for revenue by "
+                    f"{', '.join(DECOMPOSITION_DIMENSIONS)}. Ask for {metric} by {ranked_by or 'dimension'} in each "
+                    "period instead."
+                ),
+            )
+    intent = u.intent
+    if "sales_rep" in u.dimensions:
+        # Individual reps are exposed only through rep performance (the Phase 5 data policy): win rate and
+        # closed-deal counts per rep. Other per-rep figures are not available, and that is not an attack.
+        if intent == Intent.KPI_LOOKUP:
+            intent = Intent.SALES_ANALYSIS  # a per-rep breakdown is a sales analysis, not a single KPI value
+        if metric in (None, "conversion_rate"):
+            if metric == "conversion_rate":
+                assumptions.append("For sales reps, conversion is measured as the win rate of closed opportunities.")
+            metric = "win_rate"
+        if metric != "win_rate":
+            name = KPI_REGISTRY[metric].name if metric in KPI_REGISTRY else metric
+            return RequestValidation(
+                outcome="unsupported",
+                message=(
+                    f"{name} by individual sales rep is not available. Per-rep figures are limited to rep "
+                    "performance: win rate, closed and won opportunities, compared with the team median."
+                ),
+            )
     requested = {f.dimension: f.value for f in u.filters}
     for problem in check_filters(requested, max_filters=len(requested)):
         if problem.code == "invalid_filter_value":
@@ -135,8 +172,13 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
         issue = _coverage_issue(period, first, last, as_of)
         if issue:
             return RequestValidation(outcome="insufficient", message=issue)
-        wants_change = u.intent in _CHANGE_INTENTS or u.analysis_type in ("change", "contribution")
-        if u.comparison_period is not None:
+        wants_change = u.intent in _CHANGE_INTENTS or u.analysis_type in ("change", "contribution", *CHANGE_RANKINGS)
+        relative = _relative_comparison(u.comparison_period, period)
+        if relative is not None:
+            # "July vs the previous month": previous relative to the period asked about, not to today.
+            comparison = relative
+            assumptions.append(f"Comparing {_label(period)} with the period before it, {_label(comparison)}.")
+        elif u.comparison_period is not None:
             try:
                 comparison = resolve_period(u.comparison_period, as_of=as_of)
             except InvalidPeriodError as exc:
@@ -155,7 +197,7 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
     return RequestValidation(
         outcome="valid",
         request=ValidatedRequest(
-            intent=u.intent,
+            intent=intent,
             metric=metric,
             metric_name=definition.name if definition else None,
             period=period,
@@ -168,6 +210,17 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
             assumptions=assumptions,
         ),
     )
+
+
+def _relative_comparison(spec: str | None, period: Period) -> Period | None:
+    """The period before ``period`` when the comparison is "the previous month/quarter" of the same grain."""
+    key = (spec or "").strip().lower()
+    if key not in _RELATIVE_COMPARISONS or not period.is_calendar_months:
+        return None
+    months = _RELATIVE_COMPARISONS[key]
+    if int(period.months) != months or (months == 3 and period.start.month not in (1, 4, 7, 10)):
+        return None  # a different grain: resolved as an absolute period instead
+    return previous_period(period)
 
 
 def _label(period: Period) -> str:

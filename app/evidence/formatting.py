@@ -52,7 +52,11 @@ _DATE_PATTERNS = (
     re.compile(r"\b\d{4}-Q[1-4]\b", re.IGNORECASE),
     re.compile(r"\bQ[1-4]\b", re.IGNORECASE),
     re.compile(r"\b(?:19|20|21)\d{2}\b(?!\s*%)(?![.,]\d)"),  # a bare year
-    re.compile(r"\b[ECT]\d+\b"),  # evidence / claim / call identifiers
+    # Identifiers are names, not quantities: evidence / claim / call IDs (E12, C3, T1) and prefixed IDs whose
+    # digits follow letters and a separator (CUST-002529, EV-00042, INV-00731, Q-76ade5f37395, query_1847,
+    # run-abc123, R-eval-direct-1).
+    re.compile(r"\b[ECT]\d+\b"),
+    re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*[-_][A-Za-z]*\d[A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*\b"),
 )
 _NUMBER = re.compile(
     r"(?<![\w.])(?P<sign>[-+\u2212])?(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"

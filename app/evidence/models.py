@@ -87,6 +87,48 @@ class Evidence(BaseModel):
         return [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
 
 
+SUBJECT_FIELDS: tuple[str, ...] = (
+    "metric",
+    "unit",
+    "period_label",
+    "comparison_label",
+    "dimension",
+    "dimension_value",
+    "filters",
+)
+
+
+class ClaimSubject(BaseModel):
+    """What a claim is about, in structured form: the identity of the evidence it restates.
+
+    Set by the claim builders from that evidence (``evidence_id``). The validator checks that the
+    evidence still has the same identity: the same metric identifier (``revenue`` is not ``mrr``), unit,
+    period, comparison period, dimension, member and filters. A matching number on evidence about
+    something else never supports a claim.
+    """
+
+    evidence_id: str
+    metric: str | None = None
+    unit: str | None = None
+    period_label: str | None = None
+    comparison_label: str | None = None
+    dimension: str | None = None
+    dimension_value: str | None = None
+    filters: dict[str, str] = Field(default_factory=dict)
+
+    @classmethod
+    def of(cls, evidence: Evidence) -> ClaimSubject:
+        return cls(evidence_id=evidence.evidence_id, **{f: getattr(evidence, f) for f in SUBJECT_FIELDS})
+
+    def mismatches(self, evidence: Evidence) -> list[tuple[str, Any, Any]]:
+        """(field, claimed, evidence value) for every identity field that differs."""
+        return [
+            (f, getattr(self, f), getattr(evidence, f))
+            for f in SUBJECT_FIELDS
+            if getattr(self, f) != getattr(evidence, f)
+        ]
+
+
 class NumericAssertion(BaseModel):
     """A number a claim states, and where it comes from (checked for contradictions)."""
 
@@ -110,6 +152,7 @@ class Claim(BaseModel):
     direction_evidence: NumericAssertion | None = None  # the signed number that the direction must agree with
     about_period_start: date | None = None
     about_period_end: date | None = None
+    subject: ClaimSubject | None = None  # structured identity of what the claim is about (checked vs evidence)
     # Causal wording is allowed only when every cited claim has a causal basis. No builder sets one
     # today: the dataset supports associations and accounting identities, not experiments.
     causal_basis: CausalBasis = "none"
