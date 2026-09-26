@@ -22,7 +22,7 @@ from app.agent.request import ValidatedRequest
 from app.analytics.dimensions import DIMENSIONS
 from app.evidence.formatting import format_percent, format_value
 from app.evidence.models import Claim, ClaimType, Evidence, EvidenceGraph, NumericAssertion
-from app.llm.schemas import Intent
+from app.llm.schemas import CHANGE_RANKINGS, Intent
 
 CONCENTRATION_SHARE = 0.5
 MAX_GENERIC_CLAIMS = 5
@@ -37,8 +37,22 @@ _TOPICS = {
 }
 
 
+_CHANGE_RANKING_KEYS = {  # analysis type -> (the member the decomposition names, wording)
+    "largest_decrease": ("largest_decline", "decline"),
+    "largest_increase": ("largest_increase", "increase"),
+    "largest_pct_decrease": ("largest_percentage_decline", "decline"),
+    "largest_pct_increase": ("largest_percentage_increase", "increase"),
+}
+
+
 def _within(filters: dict[str, str]) -> str:
     return f" within {', '.join(f'{k}={v}' for k, v in filters.items())}" if filters else ""
+
+
+def _group_name(dimension: str | None) -> str:
+    if dimension in DIMENSIONS:
+        return DIMENSIONS[dimension].display_name.lower()
+    return dimension or "member"
 
 
 class _Builder:
@@ -130,9 +144,7 @@ class _Builder:
         wants_lowest = self.request.analysis_type == "lowest"
         chosen = bottom if wants_lowest else top
         word = "lowest" if chosen is bottom else "highest"
-        group = (
-            DIMENSIONS[chosen.dimension].display_name.lower() if chosen.dimension in DIMENSIONS else chosen.dimension
-        )
+        group = _group_name(chosen.dimension)
         self.claim(
             f"Among {group}s, {chosen.dimension_value} had the {word} {name} for {chosen.period_label}: "
             f"{chosen.display_value}.",
@@ -195,7 +207,11 @@ class _Builder:
             share = top.attributes.get(share_key)
             word = "decline" if declining else "increase"
             within = _within(total.filters)
-            primary = self.request.intent == Intent.DIMENSIONAL_COMPARISON and not total.filters
+            primary = (
+                self.request.intent == Intent.DIMENSIONAL_COMPARISON
+                and not total.filters
+                and self.request.analysis_type not in CHANGE_RANKINGS  # the ranking claim answers those
+            )
             self.claim(
                 f"The largest contribution to the revenue {word}{within} by {top.dimension} came from "
                 f"{top.dimension_value}: {top.statement.split(': ', 1)[1]}",
@@ -237,6 +253,95 @@ class _Builder:
                 )
             )
         return inferences
+
+    def change_rankings(self) -> None:
+        """Which member had the largest decline or increase, as named by the analytics layer (never re-ranked)."""
+        analysis = self.request.analysis_type
+        if self.request.intent != Intent.DIMENSIONAL_COMPARISON or analysis not in _CHANGE_RANKING_KEYS:
+            return
+        key, word = _CHANGE_RANKING_KEYS[analysis]
+        basis = " in percentage terms" if "percentage" in key else ""
+        operation = "analyze_revenue.decompose_revenue_change"
+        rows = self.evidence(operation=operation)
+        for total in rows:
+            if total.dimension_value is not None or total.filters != self.request.filters or total.status != "ok":
+                continue
+            group = _group_name(total.dimension)
+            within = _within(total.filters)
+            name = total.details.get(key)
+            if not name:
+                self.claim(
+                    f"No {group} had a revenue {word}{within} from {total.comparison_label} to {total.period_label}.",
+                    "calculated_result",
+                    [total],
+                    kind="ranking",
+                    primary=True,
+                    about=total,
+                )
+                continue
+            member = next(
+                (
+                    e
+                    for e in rows
+                    if e.dimension == total.dimension and e.filters == total.filters and e.dimension_value == name
+                ),
+                None,
+            )
+            if member is None:
+                continue
+            field = "percentage_change" if basis else "absolute_change"
+            self.claim(
+                f"Among {group}s{within}, {name} had the largest revenue {word}{basis} from {member.comparison_label} "
+                f"to {member.period_label}: {member.statement.split(': ', 1)[1]}",
+                "calculated_result",
+                [member, total],
+                kind="ranking",
+                primary=True,
+                assertions=[(member, "absolute_change"), (member, "percentage_change")],
+                direction_from=(member, field),
+                about=member,
+            )
+
+    def rep_rankings(self) -> None:
+        """The rep with the highest (or lowest) win rate among the reps the analytics layer ranked."""
+        operation = "analyze_sales.rep_performance"
+        summary = next((e for e in self.evidence(operation=operation) if e.dimension_value is None), None)
+        if summary is None or summary.status != "ok":
+            return
+        reps = [e for e in self.evidence(operation=operation) if e.dimension_value is not None]
+        compared = int(summary.attributes.get("reps_compared") or 0)
+        minimum = summary.attributes.get("min_closed")
+        note = "Win rates depend on each rep's mix of deals; differences are observations, not performance assessments."
+        if not reps or not compared:
+            self.claim(
+                f"No sales rep had at least {minimum} closed opportunities in {summary.period_label}, so reps are "
+                "not compared.",
+                "calculated_result",
+                [summary],
+                kind="ranking",
+                primary=True,
+                assertions=[(summary, "min_closed")],
+                about=summary,
+            )
+            return
+        lowest = self.request.analysis_type == "lowest"
+        chosen = (
+            max(reps, key=lambda e: int(e.attributes.get("rank") or 0))
+            if lowest
+            else min(reps, key=lambda e: int(e.attributes.get("rank") or 0))
+        )
+        word = "lowest" if lowest else "highest"
+        self.claim(
+            f"Among the {compared} sales reps with at least {minimum} closed opportunities in {chosen.period_label}, "
+            f"{chosen.dimension_value} had the {word} win rate: {chosen.statement.split(': ', 1)[1]}",
+            "calculated_result",
+            [chosen, summary],
+            kind="ranking",
+            primary=True,
+            assertions=[(chosen, "value"), (chosen, "closed_opportunities"), (summary, "min_closed")],
+            about=chosen,
+            limitations=[note],
+        )
 
     def bridge(self) -> list[Claim]:
         rows = {e.dimension_value: e for e in self.evidence(operation="analyze_revenue.revenue_bridge")}
@@ -447,6 +552,7 @@ class _Builder:
             "analyze_customers.churn_summary",
             "analyze_customers.churn_by_dimension",
             "analyze_customers.usage_churn_relationship",
+            "analyze_sales.rep_performance",
             "forecast_metric",
             "detect_anomalies",
         }
@@ -532,6 +638,8 @@ def build_claims(graph: EvidenceGraph, request: ValidatedRequest) -> EvidenceGra
     builder.kpi_values()
     builder.changes()
     inferences = builder.contributions()
+    builder.change_rankings()
+    builder.rep_rankings()
     inferences += builder.bridge()
     builder.churn()
     inferences += builder.associations()
