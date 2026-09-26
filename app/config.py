@@ -71,6 +71,16 @@ class Settings(BaseSettings):
     mcp_max_response_bytes: int = Field(default=262144, ge=16384, le=8_388_608)
     mcp_sql_enabled: bool = True  # False unlists agentops_run_safe_sql and revokes the SQL privilege
 
+    # ---- Phase 8: HTTP API and web UI (local development; see docs/api.md and docs/ui.md) ----
+    # The API runs the Phase 4/5 agent with the AGENT_* limits above; it adds only transport settings.
+    api_host: str = Field(default="127.0.0.1", pattern=r"^[A-Za-z0-9.:\[\]-]{1,253}$")
+    api_port: int = Field(default=8000, ge=1, le=65535)
+    api_request_timeout_seconds: float = Field(default=150.0, gt=0, le=3600)  # above AGENT_MAX_RUN_SECONDS
+    api_max_request_bytes: int = Field(default=16384, ge=1024, le=1_048_576)
+    api_max_pending_requests: int = Field(default=4, ge=1, le=64)  # agent runs are serialised; more waiting -> 503
+    ui_api_url: str = Field(default="http://127.0.0.1:8000", pattern=r"^https?://[^\s/?#]+(:\d{1,5})?/?$")
+    ui_request_timeout_seconds: float = Field(default=180.0, gt=0, le=3600)  # above API_REQUEST_TIMEOUT_SECONDS
+
     @field_validator("llm_model", mode="before")
     @classmethod
     def _default_model(cls, value: object) -> object:
