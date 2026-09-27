@@ -150,6 +150,8 @@ _DAY_OF_MONTH = re.compile(
 # 03/04/YYYY or 3.4.YY: a single day, and ambiguous (day-month or month-day order).
 _NUMERIC_DATE = re.compile(r"\b\d{1,2}[/.]\d{1,2}[/.](?:20)?\d{2}\b")
 _ISO_QUARTER = re.compile(r"\b(20\d{2})-q([1-4])\b")
+# "This quarter" is not complete at the business as-of date: asked about, never replaced by a month.
+_CURRENT_QUARTER = re.compile(r"\b(?:this|current) quarter\b", re.IGNORECASE)
 
 
 def understand(context: dict[str, Any]) -> dict[str, Any]:
@@ -196,6 +198,12 @@ def understand(context: dict[str, Any]) -> dict[str, Any]:
             "A single day was asked for, but KPIs are reported for whole months, quarters or years, so a day's "
             'value is not available. Ask for the whole month (for example "revenue in March", or YYYY-MM) or a '
             "quarter (YYYY-Qn)."
+        )
+        material = True
+    if _CURRENT_QUARTER.search(q):
+        ambiguities.append(
+            "The current quarter is not complete, so its KPIs are not available as a whole quarter. Ask for the last "
+            'complete quarter ("last quarter"), a quarter (YYYY-Qn) or a month.'
         )
         material = True
     if analysis == "lowest" and dimensions and _change_ranking(q, metric):
@@ -374,6 +382,10 @@ def _periods(q: str, as_of: date) -> tuple[list[str], list[str], bool]:
         ("previous month", "previous_month"),
         ("prior month", "previous_month"),
         ("last quarter", "last_quarter"),
+        ("latest quarter", "last_quarter"),
+        ("most recent quarter", "last_quarter"),
+        ("latest month", "last_month"),
+        ("most recent month", "last_month"),
         ("previous quarter", "previous_quarter"),
         ("last year", "last_year"),
         ("year to date", "ytd"),
