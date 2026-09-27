@@ -77,7 +77,7 @@ docker compose down
 
 **Images.**
 
-| | `agentops-api:0.9.0` (target `api`) | `agentops-ui:0.9.0` (target `ui`) |
+| | `agentops-api:0.10.0` (target `api`) | `agentops-ui:0.10.0` (target `ui`) |
 |---|---|---|
 | Contents | `app/` + the `api` extra (FastAPI, uvicorn, LangGraph, DuckDB, analytics stack) in a virtualenv | `app/__init__.py`, `app/config.py`, `app/ui/` + Streamlit, httpx, pydantic |
 | Not included | tests, evals, data, `data/seeds/` (ground truth), `.env`, dev tools, Streamlit | the agent, tools, analytics, DuckDB and every data file: the UI cannot open the database |
@@ -208,7 +208,7 @@ safe characters, unknown fields rejected, and `API_MAX_PENDING_REQUESTS` (503 `b
 
 | Endpoint | Auth | Meaning | Response |
 |---|---|---|---|
-| `GET /api/v1/health` | public | **Liveness**: the process serves HTTP. Checks nothing else, so a database problem never causes a restart loop | `200 {"status": "ok", "version": "0.9.0"}` |
+| `GET /api/v1/health` | public | **Liveness**: the process serves HTTP. Checks nothing else, so a database problem never causes a restart loop | `200 {"status": "ok", "version": "0.10.0"}` |
 | `GET /api/v1/readiness` | public | **Readiness**: requests can be served now | `200` or `503`, `{"status": "ready" \| "not_ready", "version", "checks": {"configuration", "database", "agent", "accepting_requests"}}` |
 
 Readiness fails when the database could not be opened or stops answering a metadata query, when the
@@ -221,7 +221,7 @@ sidebar ("API ready" / "API not ready") use it.
 Logs go to stderr, one JSON object per line (`LOG_FORMAT=json`), for `docker logs` or any collector:
 
 ```json
-{"timestamp": "2026-09-26T15:50:55.617+00:00", "level": "INFO", "logger": "agentops.api", "auth": "token", "environment": "production", "event": "service_started", "rate_limit": "20/60s", "version": "0.9.0"}
+{"timestamp": "2026-09-26T15:50:55.617+00:00", "level": "INFO", "logger": "agentops.api", "auth": "token", "environment": "production", "event": "service_started", "rate_limit": "20/60s", "version": "0.10.0"}
 {"timestamp": "2026-09-26T15:51:04.681+00:00", "level": "INFO", "logger": "agentops.agent", "event": "transition", "node": "question_received", "route": "understand_question", "run_id": "R-e843e53d2e95"}
 {"timestamp": "2026-09-26T15:51:04.743+00:00", "level": "INFO", "logger": "agentops.api", "agent_status": "completed", "agent_time_ms": 65.3, "claim_count": 3, "duration_ms": 67.7, "endpoint": "/api/v1/ask", "event": "http_request", "evidence_count": 3, "method": "POST", "outcome": "answered", "request_id": "R-e843e53d2e95", "status_code": 200, "tool_calls": 1}
 ```
