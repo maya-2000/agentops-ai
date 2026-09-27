@@ -61,7 +61,7 @@ runs use datasets generated for seeds 7 and 2027. Everything was run locally on 
 | eval_v2 multi-seed | The 12-scenario subset on seeds 7 and 2027 | 24 / 24 runs |
 | **Security benchmark** (eval_v1) | 10 security, 10 prompt-injection, 6 SQL-attack and 6 data-exposure scenarios | 32 / 32; 0 security or data-exposure failures |
 | **MCP** (eval_v1) | Discovery, 20 direct-vs-MCP parity scenarios (47 calls), and the shared execution path | 23 / 23; parity 100% |
-| **Regression tests** (`pytest`) | Unit, integration, security, MCP, API, UI, deployment and evaluation-framework tests | 2,989 collected; see the PR for the final run |
+| **Regression tests** (`pytest`) | Unit, integration, security, MCP, API, UI, deployment and evaluation-framework tests | **2,988 passed**, 0 failed, 0 skipped (including the Docker runtime test) |
 
 eval_v1 metrics in detail (all 89 scenarios):
 
