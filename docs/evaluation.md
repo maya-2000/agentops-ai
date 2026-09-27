@@ -47,9 +47,11 @@ Then: [results of the eval_v1 run](#results-of-the-eval_v1-run),
 
 ## Final results (release 0.10.0)
 
-These results come from the final release run. It used deterministic mode (the offline rule-based
-model: no key, no network) and the repository database (seed 42, as-of 2026-08-31). The multi-seed
-runs use datasets generated for seeds 7 and 2027. Everything was run locally on synthetic data.
+These are regression and system validation results for this project, on its synthetic dataset. They
+are not a general measure of AI reliability. They come from the final release run, in deterministic
+mode (the offline rule-based model: no key, no network), on the repository database (seed 42, as-of
+2026-08-31). The multi-seed runs use datasets generated for seeds 7 and 2027. Everything was run
+locally on synthetic data.
 
 | Layer | What it checks | Result |
 |---|---|---|
@@ -62,6 +64,8 @@ runs use datasets generated for seeds 7 and 2027. Everything was run locally on 
 | **Security benchmark** (eval_v1) | 10 security, 10 prompt-injection, 6 SQL-attack and 6 data-exposure scenarios | 32 / 32; 0 security or data-exposure failures |
 | **MCP** (eval_v1) | Discovery, 20 direct-vs-MCP parity scenarios (47 calls), and the shared execution path | 23 / 23; parity 100% |
 | **Regression tests** (`pytest`) | Unit, integration, security, MCP, API, UI, deployment and evaluation-framework tests | **2,988 passed**, 0 failed, 0 skipped (including the Docker runtime test) |
+| **Docker smoke test** (`scripts/smoke_test.py`) | 15 checks against the running containers: liveness, readiness, auth (401), request hardening, a comparison, a forecast, an anomaly check, a refusal, an out-of-scope question, a day-level date, an investigation, an injected objective, metrics, UI health, rate limit (429) | **15 / 15** |
+| **Static checks** | ruff, ruff format, mypy | clean |
 
 eval_v1 metrics in detail (all 89 scenarios):
 

@@ -1,7 +1,13 @@
-# AgentOps — Implementation Plan (Phase 0)
+# AgentOps AI: implementation plan and build record
 
-> Status: **Approved.** Phase 1 implemented (see §22 for implementation notes).
-> Date: 2026-09-24
+> **Final state: complete (release 0.10.0).**
+>
+> - **§1–§21** are the original Phase 0 plan, dated 2026-09-24 and kept as written for the record.
+> - **§22** has the implementation notes for every phase, 1 to 11.
+>
+> Where the plan and the notes differ, the notes and [final-architecture.md](final-architecture.md)
+> describe what was built. Ideas that were deliberately not built are listed under
+> [Out of scope](engineering-decisions.md#out-of-scope).
 
 ---
 
