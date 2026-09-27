@@ -1,7 +1,8 @@
 # AgentOps AI: final architecture
 
 This is the architecture of the finished system (version 0.10.0), as implemented. Each section links to
-the detailed document for its layer.
+the detailed document for its layer. The reasons behind the main choices, and their trade-offs, are in
+[engineering-decisions.md](engineering-decisions.md).
 
 ## 1. System overview
 
@@ -16,6 +17,11 @@ The design rule throughout is **the model can propose; the application decides.*
 deterministic offline model by default, or Claude when configured) interprets the question and, for
 `/ask`, proposes a plan. It never produces a business number, never runs a tool directly, and cannot
 widen its own permissions.
+
+![System architecture: entry points, orchestration, the secured executor, deterministic analytics over read-only DuckDB, and the evidence and validation path](assets/architecture.png)
+
+<details>
+<summary>Text version of the diagram</summary>
 
 ```
                 ┌──────────────────────┐        ┌────────────────────────────┐
@@ -47,6 +53,8 @@ widen its own permissions.
                                                read-only DuckDB (Northwind Cloud)
                    results ─▶ evidence (fingerprinted) ─▶ claims ─▶ validators ─▶ answer / brief
 ```
+
+</details>
 
 ## 2. Data layer
 
@@ -288,6 +296,8 @@ Details: [deployment.md](deployment.md).
 7. The presenter reuses `/ask`'s views for the trace, KPIs, charts, forecasts and anomalies.
 
 ## 15. Trust and validation model
+
+![The four claim labels, their validation rules and real examples](assets/trust-model.png)
 
 | Label | Meaning | Where it comes from |
 |---|---|---|
