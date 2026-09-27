@@ -1,0 +1,113 @@
+<!doctype html>
+<!-- Source of docs/assets/trust-model.png. Labels and notes are the UI's own (app/ui/view_models.py, CLAIM_STYLES);
+     the checks are app/evidence/validation.py; the examples are real output on the default dataset (seed 42). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AgentOps AI trust model</title>
+<style>
+  body { margin: 0; background: #ffffff; }
+  #figure {
+    width: 976px; padding: 20px; background: #ffffff; color: #1f2328;
+    font-family: "Source Sans 3", "Source Sans Pro", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-size: 14px; color: #57606a; margin: 0 0 18px; }
+  .row { display: flex; align-items: stretch; gap: 0; }
+  .card {
+    flex: 1 1 0; border: 1.3px solid #d0d7de; border-radius: 10px; padding: 14px 14px 12px;
+    display: flex; flex-direction: column; background: #ffffff;
+  }
+  .sep { width: 26px; display: flex; align-items: center; justify-content: center; color: #8c959f; font-size: 18px; }
+  .chip { align-self: flex-start; font-size: 14px; font-weight: 600; padding: 2px 9px; border-radius: 6px; margin-bottom: 10px; }
+  .observed .chip { background: #e0effd; color: #1766b8; }
+  .calculated .chip { background: #dff5e5; color: #17753a; }
+  .inferred .chip { background: #fff0db; color: #b25400; }
+  .recommended .chip { background: #efe7fc; color: #5d3a9b; }
+  .observed { border-top: 4px solid #6aa9ea; }
+  .calculated { border-top: 4px solid #5fbf7f; }
+  .inferred { border-top: 4px solid #f0a14a; }
+  .recommended { border-top: 4px solid #a98be8; }
+  .def { font-size: 15px; font-weight: 600; line-height: 1.3; margin-bottom: 8px; }
+  .rule { font-size: 13.5px; color: #57606a; line-height: 1.35; margin-bottom: 12px; }
+  .ex { margin-top: auto; border-top: 1px solid #eaeef2; padding-top: 10px; }
+  .ex .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #8c959f; margin-bottom: 4px; }
+  .ex q { display: block; font-size: 13.5px; line-height: 1.35; color: #24292f; quotes: "\201C" "\201D"; }
+  .ex .from { font-size: 12px; color: #8c959f; margin-top: 5px; line-height: 1.3; }
+  .scale { display: flex; justify-content: space-between; font-size: 12.5px; color: #8c959f; margin: 10px 2px 16px; }
+  .scale span:nth-child(2) { flex: 1; margin: 8px 12px 0; border-top: 1.3px solid #d0d7de; position: relative; }
+  .checks { border: 1.3px solid #a98be8; background: #f5f1ff; border-radius: 10px; padding: 12px 16px 10px; }
+  .checks h2 { font-size: 15.5px; margin: 0 0 8px; }
+  .checks ul { margin: 0; padding: 0; list-style: none; columns: 2; column-gap: 28px; }
+  .checks li { font-size: 13.5px; color: #3d444d; line-height: 1.35; margin: 0 0 6px; break-inside: avoid; padding-left: 18px; position: relative; }
+  .checks li::before { content: "\2713"; position: absolute; left: 0; color: #6f4fc4; font-weight: 700; }
+  .foot { font-size: 12.5px; color: #8c959f; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="figure">
+  <h1>Evidence and trust model</h1>
+  <p class="sub">Every statement AgentOps shows carries one of four labels and cites the evidence items it rests on.</p>
+
+  <div class="row">
+    <div class="card observed">
+      <span class="chip">Observed</span>
+      <div class="def">Read directly from recorded data.</div>
+      <div class="rule">May cite observed evidence only.</div>
+      <div class="ex">
+        <div class="label">Example</div>
+        <q>Revenue for 2026-08: SGD 5,752,877.</q>
+        <div class="from">What was revenue last month?</div>
+      </div>
+    </div>
+    <div class="sep">→</div>
+    <div class="card calculated">
+      <span class="chip">Calculated</span>
+      <div class="def">Computed from recorded data by a registered calculation.</div>
+      <div class="rule">Its tool result must have succeeded; stated numbers must match it.</div>
+      <div class="ex">
+        <div class="label">Example</div>
+        <q>The largest contribution to the revenue decline by region came from APAC: revenue changed by -SGD 62,570 (-2.74%) from 2026-07 to 2026-08; 92.1% of the gross decline.</q>
+        <div class="from">Which region had the largest revenue decline last month?</div>
+      </div>
+    </div>
+    <div class="sep">→</div>
+    <div class="card inferred">
+      <span class="chip">Inferred</span>
+      <div class="def">A reading of the evidence, not an observed fact.</div>
+      <div class="rule">Not a cause: causal wording (&ldquo;caused by&rdquo;, &ldquo;due to&rdquo;) is rejected.</div>
+      <div class="ex">
+        <div class="label">Example</div>
+        <q>The available evidence indicates the revenue decline was concentrated in region APAC, which accounted for 92.1% of the gross decline.</q>
+        <div class="from">Same question</div>
+      </div>
+    </div>
+    <div class="sep">→</div>
+    <div class="card recommended">
+      <span class="chip">Recommended</span>
+      <div class="def">A suggested next step, not a finding.</div>
+      <div class="rule">Cites the validated findings it rests on.</div>
+      <div class="ex">
+        <div class="label">Example</div>
+        <q>Investigate the country Singapore accounts within region APAC behind the revenue decline, for example their churn and contraction in 2026-08.</q>
+        <div class="from">Rests on F16 (calculated), F17 (inferred). Investigation: Why is revenue growth slowing?</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scale"><span>closer to the recorded data</span><span></span><span>more interpretation</span></div>
+
+  <div class="checks">
+    <h2>Checked for every claim before it is shown</h2>
+    <ul>
+      <li>It cites evidence from a successful tool call, with provenance (query IDs, source tables, calculation).</li>
+      <li>Its numbers and direction match the cited evidence.</li>
+      <li>Its metric, period, dimension and unit match the evidence (claim/evidence identity).</li>
+      <li>It uses no causal wording. Investigation drivers are typed as accounting shares, co-movements, associations or contradictions, never as causes.</li>
+      <li>A claim that fails is removed, never shown.</li>
+    </ul>
+  </div>
+  <div class="foot">Labels and notes as shown in the UI. Examples are real output on the default dataset (seed 42, data as of 2026-08-31).</div>
+</div>
+</body>
+</html>

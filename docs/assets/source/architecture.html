@@ -1,0 +1,184 @@
+<!doctype html>
+<!-- Source of docs/assets/architecture.png. Every box is a package under app/; see docs/final-architecture.md. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AgentOps AI architecture</title>
+<style>
+  body { margin: 0; background: #ffffff; }
+  svg { display: block; font-family: "Source Sans 3", "Source Sans Pro", "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .h { font-size: 20px; font-weight: 700; fill: #1f2328; }
+  .sub { font-size: 13.5px; fill: #57606a; }
+  .t { font-size: 15.5px; font-weight: 600; fill: #1f2328; }
+  .d { font-size: 13.5px; fill: #57606a; }
+  .p { font-family: "Source Code Pro", "DejaVu Sans Mono", Menlo, monospace; font-size: 11.5px; fill: #8c959f; }
+  .l { font-size: 12.5px; fill: #57606a; }
+  .i { fill: #f6f8fa; stroke: #d0d7de; }
+  .o { fill: #eef4ff; stroke: #8fb0ee; }
+  .og { fill: #f6f9ff; stroke: #b9cdf3; }
+  .m { fill: #ffffff; stroke: #8fb0ee; stroke-dasharray: 5 4; }
+  .s { fill: #fff8e6; stroke: #d4a72c; }
+  .a { fill: #edf8f0; stroke: #6fbf8a; }
+  .e { fill: #f5f1ff; stroke: #a98be8; }
+  rect { stroke-width: 1.3; }
+  .arrow { stroke: #6e7781; stroke-width: 1.4; fill: none; marker-end: url(#head); }
+  .dash { stroke: #8fb0ee; stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; marker-end: url(#headb); marker-start: url(#headb0); }
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1016" height="800" viewBox="0 0 1016 800">
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e7781"/>
+    </marker>
+    <marker id="headb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8fb0ee"/>
+    </marker>
+    <marker id="headb0" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8fb0ee"/>
+    </marker>
+  </defs>
+
+  <text class="h" x="20" y="32">AgentOps AI: system architecture</text>
+  <text class="sub" x="20" y="54">As implemented in release 0.10.0. The request path runs top to bottom; the validated result returns on the right.</text>
+
+  <!-- Row 1: clients -->
+  <rect class="i" x="20" y="76" width="214" height="58" rx="8"/>
+  <text class="t" x="34" y="100">MCP clients</text>
+  <text class="d" x="34" y="121">stdio, e.g. Claude Code</text>
+
+  <rect class="i" x="264" y="76" width="230" height="58" rx="8"/>
+  <text class="t" x="278" y="100">Streamlit UI</text>
+  <text class="p" x="482" y="100" text-anchor="end">app/ui</text>
+  <text class="d" x="278" y="121">Ask · Investigate · renders only</text>
+
+  <rect class="i" x="506" y="76" width="230" height="58" rx="8"/>
+  <text class="t" x="520" y="100">HTTP clients</text>
+  <text class="d" x="520" y="121">curl, scripts</text>
+
+  <!-- Row 2: MCP server and API -->
+  <rect class="i" x="20" y="166" width="214" height="76" rx="8"/>
+  <text class="t" x="34" y="190">MCP server</text>
+  <text class="p" x="222" y="190" text-anchor="end">app/mcp</text>
+  <text class="d" x="34" y="211">12 agentops_* tools</text>
+  <text class="d" x="34" y="229">no file, shell or code tools</text>
+
+  <rect class="i" x="264" y="166" width="472" height="76" rx="8"/>
+  <text class="t" x="278" y="190">FastAPI</text>
+  <text class="p" x="724" y="190" text-anchor="end">app/api</text>
+  <text class="d" x="278" y="211">bearer token (constant-time check) · per-client rate limit · request limits</text>
+  <text class="d" x="278" y="229">request IDs · NDJSON progress streams · health, readiness, metrics</text>
+
+  <!-- Row 3: orchestration and model -->
+  <rect class="og" x="254" y="268" width="492" height="108" rx="10"/>
+  <rect class="o" x="264" y="280" width="230" height="86" rx="8"/>
+  <text class="t" x="278" y="304">Agent runtime</text>
+  <text class="p" x="482" y="304" text-anchor="end">app/agent</text>
+  <text class="d" x="278" y="325">LangGraph state machine</text>
+  <text class="d" x="278" y="343">one question → one answer</text>
+
+  <rect class="o" x="506" y="280" width="230" height="86" rx="8"/>
+  <text class="t" x="520" y="304">Investigator</text>
+  <text class="p" x="724" y="304" text-anchor="end">app/investigation</text>
+  <text class="d" x="520" y="325">6 templates · enforced budgets</text>
+  <text class="d" x="520" y="343">objective → decision brief</text>
+
+  <rect class="m" x="766" y="268" width="214" height="108" rx="8"/>
+  <text class="t" x="780" y="292">Model provider</text>
+  <text class="p" x="968" y="292" text-anchor="end">app/llm</text>
+  <text class="d" x="780" y="313">deterministic (default) or Claude</text>
+  <text class="d" x="780" y="331">interprets, plans, drafts text</text>
+  <text class="d" x="780" y="349">never computes a number</text>
+  <text class="d" x="780" y="367">or runs a tool</text>
+
+  <!-- Row 4: security boundary -->
+  <rect class="s" x="20" y="408" width="960" height="60" rx="8"/>
+  <text class="t" x="34" y="432">SecuredToolExecutor: the only path to a tool</text>
+  <text class="p" x="968" y="432" text-anchor="end">app/security</text>
+  <text class="d" x="34" y="453">authorize (allow-list, intent, arguments, data-exposure policy) → deadline → execute → retry → validate output → charge budget → audit event</text>
+
+  <!-- Row 5: deterministic analytics -->
+  <rect class="a" x="20" y="500" width="214" height="80" rx="8"/>
+  <text class="t" x="34" y="524">Tools</text>
+  <text class="p" x="222" y="524" text-anchor="end">app/tools</text>
+  <text class="d" x="34" y="545">12 allow-listed, typed tools</text>
+  <text class="d" x="34" y="563">SQL: one read-only SELECT</text>
+
+  <rect class="a" x="264" y="500" width="472" height="80" rx="8"/>
+  <text class="t" x="278" y="524">Deterministic analytics: the only source of numbers</text>
+  <text class="d" x="278" y="545">20 KPIs · 8 analytics modules · forecasting with backtests · anomaly detection</text>
+  <text class="p" x="278" y="565">app/analytics · app/forecasting · app/anomalies</text>
+
+  <rect class="a" x="766" y="500" width="214" height="80" rx="8"/>
+  <text class="t" x="780" y="524">DuckDB</text>
+  <text class="p" x="968" y="524" text-anchor="end">app/database</text>
+  <text class="d" x="780" y="545">read-only connection</text>
+  <text class="d" x="780" y="563">synthetic Northwind Cloud data</text>
+
+  <!-- Row 6: evidence and validation -->
+  <rect class="e" x="20" y="634" width="214" height="84" rx="8"/>
+  <text class="t" x="34" y="658">Evidence</text>
+  <text class="p" x="222" y="658" text-anchor="end">app/evidence</text>
+  <text class="d" x="34" y="679">each tool result, with provenance</text>
+  <text class="d" x="34" y="697">and a SHA-256 fingerprint</text>
+
+  <rect class="e" x="264" y="634" width="220" height="84" rx="8"/>
+  <text class="t" x="278" y="658">Claims</text>
+  <text class="d" x="278" y="679">Observed · Calculated</text>
+  <text class="d" x="278" y="697">Inferred · Recommended</text>
+
+  <rect class="e" x="514" y="634" width="222" height="84" rx="8"/>
+  <text class="t" x="528" y="658">Validators</text>
+  <text class="d" x="528" y="679">numbers, metric, period, unit</text>
+  <text class="d" x="528" y="697">and causal wording vs. evidence</text>
+
+  <rect class="e" x="766" y="634" width="214" height="84" rx="8"/>
+  <text class="t" x="780" y="658">Answer or decision brief</text>
+  <text class="d" x="780" y="679">unsupported claims are</text>
+  <text class="d" x="780" y="697">removed before display</text>
+
+  <!-- Arrows: request path -->
+  <path class="arrow" d="M127,134 V164"/>
+  <path class="arrow" d="M379,134 V164"/>
+  <path class="arrow" d="M621,134 V164"/>
+  <path class="arrow" d="M379,242 V278"/>
+  <text class="l" x="387" y="264">POST /ask</text>
+  <path class="arrow" d="M621,242 V278"/>
+  <text class="l" x="629" y="264">POST /investigations</text>
+  <path class="dash" d="M749,322 H763"/>
+  <path class="arrow" d="M127,242 V406"/>
+  <text class="l" x="135" y="330">every MCP call</text>
+  <path class="arrow" d="M379,366 V406"/>
+  <text class="l" x="387" y="394">validated plan</text>
+  <path class="arrow" d="M621,366 V406"/>
+  <text class="l" x="629" y="394">template steps</text>
+  <path class="arrow" d="M127,468 V498"/>
+  <path class="arrow" d="M234,540 H262"/>
+  <path class="arrow" d="M736,540 H764"/>
+
+  <!-- Arrows: result path -->
+  <path class="arrow" d="M127,580 V632"/>
+  <text class="l" x="135" y="610">tool results</text>
+  <path class="arrow" d="M234,676 H262"/>
+  <path class="arrow" d="M484,676 H512"/>
+  <path class="arrow" d="M736,676 H764"/>
+  <path class="arrow" d="M980,676 H998 V204 H738"/>
+  <text class="l" x="760" y="197">validated result</text>
+
+  <!-- Legend -->
+  <rect class="i" x="20" y="748" width="14" height="14" rx="3"/>
+  <text class="l" x="40" y="760">Interfaces</text>
+  <rect class="o" x="120" y="748" width="14" height="14" rx="3"/>
+  <text class="l" x="140" y="760">Orchestration (uses the model)</text>
+  <rect class="s" x="320" y="748" width="14" height="14" rx="3"/>
+  <text class="l" x="340" y="760">Security boundary</text>
+  <rect class="a" x="462" y="748" width="14" height="14" rx="3"/>
+  <text class="l" x="482" y="760">Deterministic analytics</text>
+  <rect class="e" x="628" y="748" width="14" height="14" rx="3"/>
+  <text class="l" x="648" y="760">Evidence and validation</text>
+  <rect class="m" x="800" y="748" width="14" height="14" rx="3"/>
+  <text class="l" x="820" y="760">Pluggable</text>
+  <text class="l" x="20" y="786">MCP calls return tool results with their evidence and provenance. The model proposes; the application decides.</text>
+</svg>
+</body>
+</html>
