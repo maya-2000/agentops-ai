@@ -1,4 +1,4 @@
-# AgentOps web UI (Phases 8–9)
+# AgentOps web UI (Phases 8–10)
 
 A Streamlit page where a business user asks a question and sees the answer, the evidence behind
 it, and how it was produced. The UI is a client of the [HTTP API](api.md).
@@ -63,6 +63,32 @@ for development.
 What is deliberately not shown: prompts, model reasoning, raw tool arguments, security events and
 their pattern names, and anything the API does not return.
 
+## Investigation Mode (Phase 10)
+
+A radio at the top of the page switches between **Ask a question** (everything above, unchanged) and
+**Investigate a business issue**. The page stays a single page with the agent at its centre; there is
+no multipage dashboard. Investigation Mode calls `POST /api/v1/investigations/stream`
+([investigations.md](investigations.md)).
+
+| Section | Content | From the response |
+|---|---|---|
+| Objective | A text box, an **Investigate** button and clickable example objectives | `GET /capabilities` (`example_objectives`), with a built-in fallback list |
+| Live checklist | The plan as it runs: ✓ completed, ⟳ running, ○ not run yet, ↺ reused, ⊘ skipped, ✗ failed, with the stage label ("Analyzing revenue: Compare region performance…") | `plan`, `step_started` and `step_finished` progress events only |
+| Header | The objective, the investigation type, the periods compared, the request ID, and a status banner ("Investigation complete", "Investigation stopped: the analysis budget was reached", insufficient evidence, refusal) | `title`, `period`, `comparison_period`, `outcome` |
+| Analysis plan | Each step with its mark, title, tool, duration, and the reason it was skipped or not run | `plan` |
+| Executive summary | The validated summary | `brief.executive_summary` |
+| Key findings | One card per key finding, labelled **Observed** / **Calculated** / **Inferred**, with its area and evidence IDs; the outcome in bold | `brief.key_finding_ids`, `findings` |
+| Drivers and contributing factors | Each driver with its relationship ("Contributes to the change (accounting share)", "Moved in line with the outcome (same period)", "Associated (observed before churn)"), statement, share, confidence, findings and evidence, captioned as not established causes | `brief.drivers` |
+| Contradicting signals | Indicators that moved the other way | `brief.contradictions` |
+| Risks, Recommendations | Adverse movements; recommendations marked **Recommended**, each with its rationale (the findings it rests on) and uncertainty | `brief.risks`, `brief.recommendations` |
+| Management-brief sections | One expander per business area that produced validated findings | `brief.sections` |
+| Uncertainty, assumptions | The brief's uncertainty notes and the default-period assumptions | `brief.uncertainty`, `scope.assumptions` |
+| Visualizations, evidence, trace | The Phase 8 KPI cards, charts, forecast and anomaly panels, "Evidence & Provenance" table and "Analysis Trace", reused unchanged | `kpis`, `visualizations`, `forecasts`, `anomalies`, `evidence`, `trace`, `run` |
+
+Refused and unsupported investigations show the banner and guidance only, with no findings, charts
+or evidence. History entries of investigations are marked "Investigation ·" and keep the redacted
+objective, the outcome and a bounded summary, exactly like questions.
+
 ### Refusals, uncertainty and errors
 
 | Outcome | Shown as |
@@ -99,7 +125,8 @@ session.
 | `app/ui/client.py` | `AgentOpsClient(base_url, timeout=…, token=…)`: `health`, `readiness`, `capabilities`, `ask`, `ask_stream`. Sends the bearer token. Failures become `APIFailure(kind, message, code, request_id)`; only the API's own error envelope is shown | `tests/ui/test_ui_client.py`: mock transport and the real API in-process; `tests/ui/test_ui_production.py`: token handling, the page against the authenticated production API, bounded history, the launcher flags |
 | `app/ui/view_models.py` | Pure functions from response JSON to what is shown: `answer_view`, `claim_items`, `evidence_rows`, `trace_rows`, `kpi_cards`, `vega_lite`, `table_rows`, `forecast_panel`, `anomaly_panel`, `error_view`, `history_entry`, formatting and markdown escaping | `tests/ui/test_ui_view_models.py`: run on real API responses, including forecast, anomaly and investigation answers from the full dataset |
 | `app/ui/render.py` | Streamlit layout of the view models | exercised by the page tests |
-| `app/ui/main.py` | The page: header, sidebar, question form, examples, progress, history | `tests/ui/test_ui_app.py`: `streamlit.testing.v1.AppTest` runs the page headless against the real API in-process (answer, refusal, unsupported, history, unreachable API) |
+| `app/ui/main.py` | The page: header, sidebar, mode radio, question and investigation forms, examples, progress, history | `tests/ui/test_ui_app.py`: `streamlit.testing.v1.AppTest` runs the page headless against the real API in-process (answer, refusal, unsupported, history, unreachable API) |
+| Investigation Mode (Phase 10) | `client.investigate`, `investigate_stream`; view models `investigation_view`, `plan_rows`, `finding_items`, `driver_items`, `recommendation_items`, `section_items`, `investigation_history_entry`; `render.render_investigation` | `tests/ui/test_ui_investigation.py`: the view models on real responses (completed, refused, partial, management brief), and AppTest (both modes, the decision brief, an example objective, a refusal, mixed history, an empty objective) |
 
 The tests need no browser, server, network or API key.
 
@@ -120,4 +147,5 @@ LaTeX or Streamlit directives. Charts are Vega-Lite specifications built from th
 - **Chart types are those the API provides** (§6 of [api.md](api.md)). Questions whose evidence
   has no chartable shape show tables and evidence only.
 - **The progress box reports finished agent stages.** With the deterministic provider an answer
-  takes well under a second, so the box mostly shows its final state.
+  takes well under a second, so the box mostly shows its final state. The same holds for the
+  investigation checklist (investigations take under a second on the full dataset).

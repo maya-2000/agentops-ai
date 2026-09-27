@@ -6,7 +6,7 @@ investigation, runs validated SQL and statistical tools against real data, check
 evidence and returns an answer in which every number is traceable to a query. It keeps
 observed facts separate from inference and says when the evidence is insufficient.
 
-> **Status: Phase 9 complete: production hardening and deployment readiness.**
+> **Status: Phase 10 complete: investigation and decision intelligence.**
 > See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the full plan.
 
 | Phase | Scope | Status |
@@ -21,7 +21,8 @@ observed facts separate from inference and says when the evidence is insufficien
 | 7 | Evaluation & benchmark suite (89 scenarios, deterministic grading, security, MCP parity) | ✅ |
 | 8 | Product API and UI (FastAPI + Streamlit: typed answers, evidence, charts, trace) | ✅ |
 | 9 | Production hardening and deployment (auth, rate limiting, logs, metrics, readiness, bounded runs, Docker, CI) | ✅ |
-| 10 | Final QA and portfolio documentation | ⏳ |
+| 10 | Investigation & decision intelligence (multi-step investigations, decision briefs, eval_v2) | ✅ |
+| 11 | Final QA and portfolio documentation | ⏳ |
 
 ## The data: Northwind Cloud
 
@@ -134,6 +135,66 @@ result.tool_trace                # every tool call with inputs, status, timing a
 
 Details: [`docs/agent-architecture.md`](docs/agent-architecture.md)
 
+## Evidence-backed Business Investigations
+
+`/ask` answers one question. An **investigation** answers a business objective. AgentOps plans
+several analytical steps, runs each one through the same secured tools, validates the findings
+against each other, separates drivers from causes, and returns a **decision brief**. Every statement
+in the brief rests on evidence (Phase 10).
+
+**User:** "Why is revenue growth slowing?"
+
+**AgentOps:**
+
+```
+Plan                                             (streamed as a live checklist)
+✓ Revenue trend           Measure the revenue change; recurring-revenue movements (new, expansion, churn)
+✓ Regional performance    Compare region and segment performance; drill into the region that concentrates the change
+✓ Customer movement       Analyse customer churn and net revenue retention; usage and support before churn
+✓ Sales                   Check win rate and the sales pipeline
+✓ Anomalies               Check for statistically unusual revenue
+✓ Validation              Claims checked against their evidence, then findings checked against each other
+
+Result
+→ Findings         Revenue changed by -SGD 56,286 (-0.97%) from 2026-07 to 2026-08. (calculated, E3)
+→ Drivers          Region APAC: 92.1% of the gross decline (contributes to)
+                   Country Singapore within APAC: 83.2% (contributes to)
+                   Logo churn +0.62 pp, NRR -1.54 pp, pipeline -3.3% (moved in line, same period)
+→ Contradicting    Win rate rose: the evidence does not point to it
+→ Recommendations  Investigate the Singapore accounts within APAC behind the revenue decline (rests on F16, F17)
+                   Review the customers who churned in 2026-08 (rests on F10)
+→ Uncertainty      Drivers are accounting contributions and same-period co-movements, not established causes
+→ Evidence         41 evidence items from 11 tool calls, each with query IDs, source tables and calculation
+```
+
+- **Bounded plans, no free-form tool use.** Six templates (revenue, customer, sales, product and
+  support, general, management brief) map the objective to allow-listed steps. Dependencies,
+  conditions and evidence-bound arguments come from closed sets evaluated in code, and an identical
+  call is reused rather than run twice.
+- **Same security path.** Every step goes through the secured executor under the template's intent,
+  with SQL never permitted. Injected or hidden-data objectives are refused before any model or tool
+  call.
+- **Budgets enforced in code.** Steps, tool calls, runtime, evidence and output size are all capped.
+  A budget stop is reported as "Investigation stopped because the analysis budget was reached.",
+  never as complete.
+- **Grounded drivers and recommendations.** Drivers come only from rules: accounting contributions,
+  same-period co-movements, associations and context. Recommendations cite the findings they rest on,
+  and pass the evidence validator.
+- **No false causality.** "Did the price increase cause churn?" returns `insufficient_evidence` with
+  the observed findings. Causal wording is removed wherever it appears.
+- **Everywhere, the same way.** `POST /api/v1/investigations` and `/investigations/stream` (progress
+  events: stage, step, tool, status, duration; never reasoning), and a Streamlit **Investigation
+  Mode**. `/ask` is unchanged.
+
+```bash
+curl -s http://127.0.0.1:8000/api/v1/investigations \
+  -H "Authorization: Bearer $API_AUTH_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"objective": "Why is revenue growth slowing?"}'
+```
+
+Architecture, lifecycle, budgets, guardrails, evaluation and limitations:
+[`docs/investigations.md`](docs/investigations.md)
+
 ## Security and reliability
 
 Security is enforced inside the agent (Phase 5) and, since Phase 9, in front of it: bearer-token
@@ -244,10 +305,25 @@ must match their evidence. The benchmark, its thresholds and the security policy
 to get there. A full pass means the known failure modes are fixed, not that the agent is reliable
 in general. Details: [`docs/phase-7-1-reliability.md`](docs/phase-7-1-reliability.md).
 
+**Investigation benchmark (eval_v2, Phase 10).** A second, separate dataset has 77 deterministic
+investigation scenarios in 18 categories. It checks each investigation for the following:
+
+- plan, steps and tools;
+- evidence completeness and identity;
+- drivers, recommendation grounding and causal safety;
+- budgets and cancellation;
+- management-brief safety;
+- the API and UI transformations;
+- MCP parity.
+
+The results are 77/77, the critical suite 12/12, and the multi-seed subset 24/24 on seeds 7 and 2027.
+eval_v1 is unchanged.
+
 ```bash
 python -m evals.run                    # full benchmark, deterministic (no key, no network)
 python -m evals.run --suite critical   # 13-scenario regression suite
 python -m evals.run --category prompt_injection --multi-seed 7,2027
+python -m evals.run --dataset eval_v2 --multi-seed 7,2027   # the investigation benchmark
 ```
 
 Metrics, thresholds, reports and limitations: [`docs/evaluation.md`](docs/evaluation.md)
@@ -509,11 +585,14 @@ app/
                          data-exposure policy, output guard, budgets, retries, timeouts, redaction, audit events,
                          the secured tool executor shared by the agent and MCP
   mcp/                   MCP server: tool registry, adapters, schemas, error model, audit, stdio entry point
-  api/                   FastAPI app: /ask, /ask/stream, /health, /readiness, /capabilities, /metrics; schemas,
+  investigation/         multi-step investigations: templates, planner, step execution, cross-finding validation,
+                         driver analysis, grounded recommendations, decision briefs (Phase 10)
+  api/                   FastAPI app: /ask, /ask/stream, /investigations, /investigations/stream, /health,
+                         /readiness, /capabilities, /metrics; schemas,
                          agent service and run tracker, bearer auth and rate limiter, presenter and chart specs,
                          error model, request-ID and security-header middleware
   ui/                    Streamlit page, HTTP client, testable view models, rendering, hardened launcher
-evals/                   evaluation harness (not part of the app): scenario datasets, independent references,
+evals/                   evaluation harness (not part of the app): scenario datasets (eval_v1, eval_v2), independent references,
                          hidden-label mapping, runners, deterministic graders, metrics, thresholds, reports
 data/
   generator/             reproducible synthetic-data pipeline (CLI: python -m data.generator.generate)
@@ -523,7 +602,7 @@ database/                DuckDB file (generated, git-ignored)
 docs/                    implementation plan, data dictionary, analytics guide, KPI catalog,
                          forecasting and anomaly-detection guides, agent architecture,
                          security overview, architecture and threat model, MCP architecture, evaluation, API, UI,
-                         deployment
+                         deployment, investigations
 scripts/smoke_test.py    smoke test for a running deployment (local or docker compose)
 tests/                   unit, integration, security (adversarial, SQL attack, regression), MCP, evaluation,
                          API (contract, security, production, runtime, streaming, isolation, performance),
