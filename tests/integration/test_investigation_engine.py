@@ -394,3 +394,20 @@ def test_the_objective_premise_is_checked_against_the_evidence(agent: Investigat
         assert premise and "decline" in premise[0]
     else:
         assert not premise
+
+
+def test_one_driver_per_indicator_and_the_named_outcome_is_measured(agent: Investigator) -> None:
+    """Resolution time is measured when named; ticket volume reported by two tools is one driver, not two."""
+    result = agent.investigate("Why did average resolution time increase?")
+    assert result.plan is not None and result.plan.outcome_metric == "average_resolution_time"
+    outcome = next((f for f in result.findings if f.primary), None)
+    assert outcome is not None and outcome.metric == "average_resolution_time"
+    brief = result.brief
+    assert brief is not None
+    metrics = [
+        result.finding(d.finding_ids[0]).metric  # type: ignore[union-attr]
+        for d in [*brief.drivers, *brief.contradictions, *brief.context]
+        if d.relationship in ("supports", "contradicts", "contextualizes")
+    ]
+    indicators = ["support_ticket_volume" if m == "tickets" else m for m in metrics]
+    assert len(indicators) == len(set(indicators)), metrics
