@@ -9,7 +9,8 @@ start while any remain. The messages name settings, never their values.
   - rate limiting on;
   - no wildcard and no plain-HTTP CORS origin;
   - an explicitly configured ``DATABASE_URL``;
-  - timeouts that nest: SQL ≤ tool ≤ agent run ≤ API request ≤ UI request.
+  - timeouts that nest: SQL ≤ tool ≤ agent run ≤ API request ≤ UI request, and
+    tool ≤ investigation ≤ API request.
 """
 
 from __future__ import annotations
@@ -121,4 +122,13 @@ def _production_problems(s: Settings) -> list[str]:
     for (inner, inner_value), (outer, outer_value) in pairwise(chain):
         if inner_value > outer_value:
             problems.append(f"{inner} must not exceed {outer} (timeouts nest from the inside out).")
-    return problems
+    # An investigation (Phase 10) runs several tool calls inside one API request.
+    investigation = [
+        ("AGENT_TOOL_TIMEOUT_SECONDS", s.agent_tool_timeout_seconds),
+        ("AGENT_MAX_INVESTIGATION_SECONDS", s.agent_max_investigation_seconds),
+        ("API_REQUEST_TIMEOUT_SECONDS", s.api_request_timeout_seconds),
+    ]
+    for (inner, inner_value), (outer, outer_value) in pairwise(investigation):
+        if inner_value > outer_value:
+            problems.append(f"{inner} must not exceed {outer} (timeouts nest from the inside out).")
+    return list(dict.fromkeys(problems))

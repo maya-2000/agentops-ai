@@ -414,8 +414,12 @@ def test_the_env_example_is_safe_and_complete() -> None:
     assert values["API_AUTH_TOKEN"].strip() == "" and values["ANTHROPIC_API_KEY"].strip() == ""
     for name in ("APP_ENV", "API_AUTH_MODE", "API_RATE_LIMIT", "API_CORS_ORIGINS", "LOG_FORMAT", "UI_HISTORY_LIMIT"):
         assert name in values, name
+    investigation = ("STEPS", "TOOL_CALLS", "SECONDS", "EVIDENCE", "OUTPUT_CHARS")  # Phase 10
+    for name in (f"AGENT_MAX_INVESTIGATION_{suffix}" for suffix in investigation):
+        assert name in values, name
     settings = Settings(_env_file=PROJECT_ROOT / ".env.example")  # type: ignore[call-arg]
     assert settings.api_auth_mode == "token" and settings.rate_limit == (20, 60.0)
+    assert settings.agent_max_investigation_seconds <= settings.api_request_timeout_seconds
 
 
 def test_the_api_config_check_lists_every_problem() -> None:
