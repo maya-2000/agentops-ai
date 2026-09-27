@@ -21,6 +21,7 @@ dataset and this configuration, not production reliability or production latency
 
 Contents:
 
+0. [Final results (release 0.10.0)](#final-results-release-0100)
 1. [Evaluation architecture](#1-evaluation-architecture)
 2. [Why evaluate this way](#2-why-evaluate-this-way)
 3. [Scenario model](#3-scenario-model)
@@ -41,6 +42,71 @@ Contents:
 Then: [results of the eval_v1 run](#results-of-the-eval_v1-run),
 [eval_v2: the investigation benchmark](#eval_v2-the-investigation-benchmark-phase-10) and
 [testing](#testing).
+
+---
+
+## Final results (release 0.10.0)
+
+These results come from the final release run. It used deterministic mode (the offline rule-based
+model: no key, no network) and the repository database (seed 42, as-of 2026-08-31). The multi-seed
+runs use datasets generated for seeds 7 and 2027. Everything was run locally on synthetic data.
+
+| Layer | What it checks | Result |
+|---|---|---|
+| **eval_v1**, single questions (89 scenarios) | Intent, parameters, tool choice and execution, numbers against the independent pandas reference, evidence grounding, claim support, hallucination, causal wording, uncertainty, refusals, security, data exposure, MCP, evidence integrity | **89 / 89**, all thresholds pass |
+| eval_v1 critical suite | 13 fast regression scenarios | 13 / 13 |
+| eval_v1 multi-seed | The 11-scenario subset on seeds 7 and 2027 | 22 / 22 runs |
+| **eval_v2**, investigations (77 scenarios, 18 categories) | Plans, steps and bindings, tools, evidence completeness and identity, periods, drivers, recommendation grounding, causal safety, budgets, cancellation, management-brief safety, API, UI view models, MCP parity | **77 / 77**, every rate 100%, all thresholds pass |
+| eval_v2 critical suite | 12 scenarios | 12 / 12 |
+| eval_v2 multi-seed | The 12-scenario subset on seeds 7 and 2027 | 24 / 24 runs |
+| **Security benchmark** (eval_v1) | 10 security, 10 prompt-injection, 6 SQL-attack and 6 data-exposure scenarios | 32 / 32; 0 security or data-exposure failures |
+| **MCP** (eval_v1) | Discovery, 20 direct-vs-MCP parity scenarios (47 calls), and the shared execution path | 23 / 23; parity 100% |
+| **Regression tests** (`pytest`) | Unit, integration, security, MCP, API, UI, deployment and evaluation-framework tests | 2,989 collected; see the PR for the final run |
+
+eval_v1 metrics in detail (all 89 scenarios):
+
+- **At 100%:** intent, parameter and tool-selection accuracy; tool execution; numerical accuracy (39
+  reference checks); evidence grounding; claim support; uncertainty; refusal precision and recall;
+  data exposure; MCP parity; tool efficiency; evidence-integrity detection.
+- **At 0%:** hallucination, unsupported causal claims, false refusals, unnecessary tools and forbidden
+  tools.
+
+**What the results show.** Every behaviour the benchmarks encode holds on this dataset and on two
+other generated seeds:
+
+- numbers match the independent reference;
+- every material statement cites executed, provenance-carrying evidence;
+- no unsupported causal claim is made;
+- every attack in the benchmark is blocked or safely restricted;
+- MCP returns exactly what the direct path returns;
+- investigations stay within budget and cite their evidence.
+
+The graders are themselves tested: corrupted answers and investigations must be detected
+(`tests/evals/`).
+
+**What they do not prove.**
+
+- **Scope.** They do not prove the agent is reliable in general, or accurate on other data. The
+  benchmark measures a finite set of phrasings on one synthetic company.
+- **Model.** The headline numbers grade the deterministic model; an LLM-mode run can score
+  differently.
+- **Wording.** Wording quality is not graded, unless the optional LLM judge is enabled.
+- **Latency.** Latency figures are local and indicative, not production claims.
+- **Ceiling.** 100% on a benchmark written alongside the system is a regression floor, not a ceiling.
+  New failure modes should become new scenarios. The Phase 7 baseline was 82 / 89 before the
+  Phase 7.1 fixes; see [Results of the eval_v1 run](#results-of-the-eval_v1-run).
+
+Reproduce:
+
+```bash
+python -m data.generator.generate                       # the seed-42 repository database
+python -m evals.run                                     # eval_v1, full
+python -m evals.run --suite multi_seed --multi-seed 7,2027
+python -m evals.run --dataset eval_v2 --multi-seed 7,2027   # eval_v2, full, plus its multi-seed subset
+python -m evals.run --suite critical && python -m evals.run --dataset eval_v2 --suite critical
+```
+
+Reports (JSON and Markdown) are written to `reports/evaluation/`.
 
 ---
 
