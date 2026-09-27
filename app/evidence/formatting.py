@@ -29,7 +29,12 @@ def format_value(value: float | int | None, unit: str | None) -> str:
         return f"{v:,.1f} hours"
     if unit == "days":
         return f"{v:,.1f} days"
-    return f"{v:,.4g}"
+    return format_number(v)
+
+
+def format_number(value: float) -> str:
+    """A number without a unit: four significant digits, and never exponent notation (29,470, not 2.947e+04)."""
+    return f"{value:,.0f}" if abs(value) >= 1000 else f"{value:,.4g}"
 
 
 def format_percent(fraction: float, *, signed: bool = False) -> str:
