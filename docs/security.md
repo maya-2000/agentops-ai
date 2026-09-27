@@ -266,5 +266,13 @@ changed, weakened or replaced.
 | Ground-truth isolation | No application code reads the labels; an audit hook shows no file, process or network access during agent and investigation runs; label text never reaches prompts, logs or results | `tests/security/test_ground_truth_isolation.py`, `tests/evals/test_eval_boundary.py`, `tests/unit/test_investigation_isolation.py` |
 | Docker | Non-root uid 10001, read-only root filesystem, `cap_drop: ALL`, `no-new-privileges`, localhost-only ports, read-only data mounts, no secrets, data, tests or evals in the images | `tests/deploy/test_deployment.py`, the Docker smoke test |
 
-The results of the final run are in the Phase 11 pull request.
+Results of the final run:
+
+- **Tests:** the full suite, 2,988 tests, passes (including every security, MCP, API, deployment and
+  Docker runtime test).
+- **Security benchmark:** eval_v1 passes 32/32 (10 security, 10 prompt injection, 6 SQL, 6 data
+  exposure).
+- **Investigations:** the eval_v2 security and budget-enforcement categories pass.
+- **Live checks:** the Docker smoke test passes 15/15 against the hardened containers. The API log
+  holds neither the objective text nor the token.
 
