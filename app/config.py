@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     agent_tool_timeout_seconds: float = Field(default=30.0, gt=0)
     agent_sql_timeout_seconds: float = Field(default=10.0, gt=0)
     agent_disabled_tools: str = ""  # comma-separated tool names switched off for the agent
+    agent_max_investigation_steps: int = Field(default=14, ge=1, le=40)
+    agent_max_investigation_tool_calls: int = Field(default=16, ge=1, le=60)
+    agent_max_investigation_seconds: float = Field(default=120.0, gt=0)
+    agent_max_investigation_evidence: int = Field(default=400, ge=10, le=5000)
+    agent_max_investigation_output_chars: int = Field(default=12000, ge=1000, le=100000)
 
     # ---- Phase 6: MCP server (local stdio transport; see docs/mcp-architecture.md) ----
     # The MCP server uses the agent limits above; these settings only add what is MCP-specific.

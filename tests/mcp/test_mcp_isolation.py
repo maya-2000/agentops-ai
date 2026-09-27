@@ -146,3 +146,12 @@ def test_transport_is_local_stdio_only() -> None:
     assert "mcp.server.stdio" in imports
     for module in imports:
         assert not re.search(r"streamable_http|\bsse\b|uvicorn|starlette|websocket", module), module
+
+
+def test_investigations_are_not_an_mcp_capability() -> None:
+    """Phase 10 adds investigations to the API and UI only: the MCP catalogue and imports are unchanged."""
+    from tests.phase6_support import EXPECTED_TOOLS
+
+    assert not [name for name in EXPECTED_TOOLS if "investigat" in name]
+    imports = {m for path in MCP for m in _imports(path)}
+    assert not [m for m in imports if m.startswith("app.investigation")]

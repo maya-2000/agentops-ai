@@ -1,4 +1,4 @@
-# Agent evaluation and benchmarking (Phase 7)
+# Agent evaluation and benchmarking (Phases 7 and 10)
 
 How reliably does AgentOps behave across business questions, security attacks, evidence
 grounding, MCP calls and different data conditions? Phase 7 answers that with a benchmark that
@@ -9,6 +9,12 @@ runs the **real production paths** and grades their **structured behaviour** aga
 - Dataset: [`evals/datasets/eval_v1.json`](../evals/datasets/eval_v1.json) (89 scenarios)
 - Tests: [`tests/evals/`](../tests/evals)
 - Run: `python -m evals.run` (deterministic mode: no network, model or API key)
+
+**Phase 10** adds a second, separate benchmark for multi-step investigations: **eval_v2**
+(`evals/datasets/eval_v2.json`, 77 scenarios in 18 categories). It has its own typed model
+(`evals/scenarios/investigation.py`, schema 2.0), runners, grader, metrics and thresholds. eval_v1,
+its schema (1.0) and its thresholds are unchanged. See [eval_v2](#eval_v2-the-investigation-benchmark-phase-10)
+below and [investigations.md §12](investigations.md#12-evaluation).
 
 The benchmark is a local prototype evaluation on synthetic data. Its numbers describe this
 dataset and this configuration, not production reliability or production latency.
@@ -32,7 +38,9 @@ Contents:
 15. [Reading the reports](#15-reading-the-reports)
 16. [Limitations](#16-limitations)
 
-Then: [results of the eval_v1 run](#results-of-the-eval_v1-run) and [testing](#testing).
+Then: [results of the eval_v1 run](#results-of-the-eval_v1-run),
+[eval_v2: the investigation benchmark](#eval_v2-the-investigation-benchmark-phase-10) and
+[testing](#testing).
 
 ---
 
@@ -491,6 +499,8 @@ python -m evals.run --dataset eval_v1 --output reports/evaluation
 python -m evals.run --list --suite critical           # list the selection
 python -m evals.run --mode llm                        # the agent on the configured model (needs a key)
 python -m evals.run --judge-model <model>             # optional clarity/relevance judge (needs a key)
+python -m evals.run --dataset eval_v2                 # the investigation benchmark (Phase 10)
+python -m evals.run --dataset eval_v2 --suite critical --multi-seed 7,2027
 ```
 
 - The default data is the repository database (`python -m data.generator.generate` builds it,
@@ -638,6 +648,44 @@ unchanged, and the grader is stricter (independent claim-subject check, no ident
 
 A full pass means the known failure modes are fixed and guarded by regression tests, not that the
 agent is reliable in general (see [Limitations](#16-limitations)).
+
+## eval_v2: the investigation benchmark (Phase 10)
+
+eval_v2 evaluates investigations ([investigations.md](investigations.md)). It follows the same
+principles as eval_v1, with its own components:
+
+- It runs the real paths.
+- It grades structured behaviour, never wording.
+- It takes expected values from independent references at run time.
+- It never reads the hidden labels outside `evals/reference/`.
+
+| Component | Module |
+|---|---|
+| Scenario model and loader | `evals/scenarios/investigation.py`: `InvestigationScenario`, expectation, reference checks, 18 categories, 5 modes |
+| Dataset | `evals/datasets/eval_v2.json`: 77 scenarios; critical suite 12, multi-seed subset 12 |
+| References | `evals/reference/investigation.py`: relative periods, expected co-movement signs, outcome values and leading contributions from the pandas reference, causal and suggestion patterns |
+| Runners | `evals/runners/investigation.py`: `Investigator` (and cancellation), the FastAPI app (plain, streamed, `/ask` compatibility), the UI view models, MCP parity |
+| Grader | `evals/graders/investigation.py`: 20 scores (plan, steps, tools, evidence, identity, period, comparison, drivers, recommendations, causal, refusal, security, budget, efficiency, brief, numerical, cancellation, api, ui, mcp) |
+| Metrics and thresholds | `evals/metrics/investigation.py`: every rate at 1.0; zero security failures, causal failures, duplicate calls and budget violations |
+| Benchmark and reports | `evals/investigation_benchmark.py`, `evals/reports/investigation.py` (`EVAL2-*.json`, `.md`) |
+
+Categories:
+
+- investigation planning, step selection, tool selection;
+- evidence grounding, period correctness, comparison correctness;
+- driver identification, recommendation grounding, causal-language safety;
+- insufficient evidence, refusal, security;
+- budget enforcement, cancellation, management brief;
+- investigation API, UI response transformation, MCP parity.
+
+Results (deterministic mode, seed 42 repository database):
+
+- **Full run:** 77/77, every rate 100%, mean 9.8 tool calls per investigation, 0 duplicate calls.
+- **Critical suite:** 12/12.
+- **Multi-seed:** 24/24 on seeds 7 and 2027.
+
+The grader is itself tested by corrupting real investigations one defect at a time
+(`tests/evals/test_eval_v2.py`).
 
 ## Testing
 

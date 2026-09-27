@@ -456,7 +456,8 @@ Note: the top-level `mcp/` directory name would shadow the `mcp` SDK package whe
 | 7 | 60+ benchmark cases; runner; metrics; report; hallucination suite | Full evaluation executed; report generated from actual run |
 | 8 | FastAPI; Streamlit (7 pages) | API integration tests pass; Streamlit AppTest smoke passes; manual startup verified |
 | 9 | Production hardening and deployment readiness: authentication, rate limiting, safe configuration, structured logs, metrics, health/readiness, bounded runs, graceful shutdown, Docker, CI | Security, API, deployment and benchmark suites pass; Docker smoke test passes |
-| 10 | Full QA: pytest, evaluation, ruff, mypy, API health, UI startup; README, docs, business case, demo scenarios; final engineering report | All quality-bar items checked with evidence |
+| 10 | Investigation and decision intelligence: multi-step investigations, cross-finding validation, driver analysis, grounded recommendations, decision briefs, investigation API and UI mode, eval_v2 | eval_v1 unchanged and passing; eval_v2 (50+ scenarios) passing, including multi-seed; security and MCP suites pass |
+| 11 | Full QA: pytest, evaluation, ruff, mypy, API health, UI startup; README, docs, business case, demo scenarios; final engineering report | All quality-bar items checked with evidence |
 
 After each phase: run tests → inspect outputs → fix → update docs → commit and push to `claude/agentops-ai-agent-39zngk`.
 
@@ -916,3 +917,37 @@ UI → API → LangGraph agent → secured executor → tools → read-only Duck
 Not added, by design: user accounts, persistence of questions or runs, a `/runs` endpoint, Redis,
 Postgres, Kubernetes or cloud infrastructure. The benchmark scenarios, thresholds and security
 policy are unchanged.
+
+### Phase 10 (investigation and decision intelligence) — complete
+
+Phase 10 adds multi-step **investigations** next to single questions. The agent, the analytics engine,
+the secured executor and the evidence layer are unchanged and reused. The plan's final QA phase moves
+to Phase 11. Details: [investigations.md](investigations.md), with updates to [api.md](api.md),
+[ui.md](ui.md), [evaluation.md](evaluation.md), [security.md](security.md) and
+[deployment.md](deployment.md).
+
+| Topic | Implemented | Reason |
+|---|---|---|
+| Model | `app/investigation/models.py`: investigation, plan and steps, step records, findings with full identity, relationships, drivers, recommendations, decision brief, validation issues, budget, efficiency and timing reports | Typed data, no prompts or reasoning stored |
+| Planning | Six templates chosen by brief cues, then metric, then intent (`planner.py`, `templates.py`). Each step names one allow-listed tool and the intent it is authorised under, and measures the outcome the objective names. Conditions and bindings are closed `Literal` sets | The model never chooses a tool call |
+| Execution | `Investigator` on the agent's own runtime. Every step goes through `SecuredToolExecutor.execute` with `sql_permitted=False`. Dependencies, conditions, evidence-bound arguments and reuse of identical calls; sequential on the one read-only connection | Same security path as `/ask` and MCP |
+| Budgets | `AGENT_MAX_INVESTIGATION_{STEPS,TOOL_CALLS,SECONDS,EVIDENCE,OUTPUT_CHARS}` via `RunBudget.for_investigation`. A stop gives `budget_exhausted` and the fixed stop message; nested-timeout production rule | Enforced in code, not by the model |
+| Validation | Phase 5/7.1 evidence validator, then cross-finding validation (evidence, identity, text, periods, relationships, drivers, recommendations): remove or downgrade, never repair | Every finding traceable to evidence |
+| Drivers | Rule-based `contributes_to`, `supports`, `contradicts`, `correlates_with`, `contextualizes`; expected co-movement table; contradictions reported and explained | Correlation is not presented as causation |
+| Recommendations | Rule-based next steps, each a `recommendation` claim citing its findings and their evidence, at most four | Grounded in findings |
+| Decision brief | Validated summary, key findings, drivers, contradictions, risks, recommendations, uncertainty (premise check, causal questions, incomplete runs), management-brief sections with data only, size cap | Management briefs must not become persuasive hallucinations |
+| API | `POST /api/v1/investigations` and `/investigations/stream` (stage, step, tool, status, duration), sharing `/ask`'s service, auth, rate limit, limits, timeout and cancellation; no status endpoint; capabilities list the investigation types | `/ask` unchanged |
+| UI | Investigation Mode: live plan checklist, decision brief, drivers, contradictions, recommendations, uncertainty, reusing the Phase 8 evidence, chart and trace rendering; bounded session history | The agent stays central |
+| Evaluation | eval_v2 (`evals/scenarios/investigation.py`, `evals/datasets/eval_v2.json`): 77 scenarios, 18 categories, 5 modes, independent references, grader-mutation tests, multi-seed. eval_v1 unchanged | Measure plans, evidence, drivers, grounding, causal safety and budgets |
+| MCP | Unchanged; no investigation tool; eval_v2 checks step-by-step parity with MCP | Not added merely for symmetry |
+
+Fixes found while building Phase 10, each with a regression test:
+
+- **Number formatting.** Evidence statements formatted mid-sized numbers in scientific notation
+  ("2.947e+04"), so the response validator rejected findings that quoted them. `format_number` now
+  writes thousands with separators.
+- **"This quarter".** "This quarter" or "current quarter" was silently read as last month. It now
+  asks for a complete quarter. "Latest quarter" and "most recent quarter" mean the last complete
+  quarter.
+
+The eval_v1 scenarios and thresholds and the security policy are unchanged.

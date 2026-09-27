@@ -1,9 +1,12 @@
 """The AgentOps web UI: ``streamlit run app/ui/main.py`` (the API must be running; see docs/ui.md).
 
-The page sends each question to the AgentOps API (``UI_API_URL``) and renders the response: the
-answer, typed findings, KPI cards, charts, forecast and anomaly details, evidence and provenance,
-and the analysis trace. It never touches the database or the agent directly. Questions and answers
-of the current browser session are kept in memory (``st.session_state``, at most
+The page has two modes. **Ask a question** sends one question to the AgentOps API (``UI_API_URL``)
+and renders the response: the answer, typed findings, KPI cards, charts, forecast and anomaly
+details, evidence and provenance, and the analysis trace. **Investigate a business issue** (Phase 10)
+sends an objective to ``/investigations/stream``, shows the plan as a live checklist, then renders the
+decision brief: summary, key findings, drivers, risks, recommendations, uncertainty, evidence and the
+analysis trace. The page never touches the database or the agent directly. Questions, objectives and
+their results of the current browser session are kept in memory (``st.session_state``, at most
 ``UI_HISTORY_LIMIT``) only; nothing is stored. Requests carry ``API_AUTH_TOKEN`` when it is set;
 the token is never shown. Start it with ``python -m app.ui`` (``app/ui/__main__.py``).
 """
@@ -24,7 +27,13 @@ TITLE = "AgentOps AI"
 TAGLINE = "Evidence-backed AI Business Intelligence"
 DESCRIPTION = (
     "Ask business questions in natural language. AgentOps analyzes trusted business data, validates evidence, "
-    "and explains the result."
+    "and explains the result. Or investigate a business issue and get an evidence-backed decision brief."
+)
+MODES = ("Ask a question", "Investigate a business issue")
+EXAMPLE_OBJECTIVES = (
+    "Why is revenue growth slowing?",
+    "Why is customer churn increasing?",
+    "Give me a management brief on the current state of the business.",
 )
 EXAMPLES = (
     "What was revenue in July compared with June?",
@@ -64,11 +73,17 @@ def _init_state() -> None:
     st.session_state.setdefault("history", [])  # vm.HistoryEntry, newest first
     st.session_state.setdefault("current", None)  # {"question": str, "response": dict | None, "failure": ...}
     st.session_state.setdefault("question", "")
+    st.session_state.setdefault("objective", "")
 
 
 def _use_example(question: str) -> None:
     st.session_state.question = question
     st.session_state.submit = True
+
+
+def _use_objective(objective: str) -> None:
+    st.session_state.objective = objective
+    st.session_state.run_objective = True
 
 
 def _clear_history() -> None:
@@ -126,6 +141,42 @@ def _ask(client: AgentOpsClient, question: str) -> None:
     st.session_state.current = current
 
 
+def _investigate(client: AgentOpsClient, objective: str) -> None:
+    """Run an investigation with a live checklist of its plan (stage and step events only; never reasoning)."""
+    current: dict[str, Any] = {"question": objective, "response": None, "failure": None, "kind": "investigation"}
+    with st.status("Investigating…", expanded=True) as status:
+        checklist = st.empty()
+        plan: list[dict[str, Any]] = []
+        statuses: dict[str, str] = {}
+
+        def on_progress(event: dict[str, Any]) -> None:
+            stage = event.get("stage")
+            if stage == "plan" and isinstance(event.get("steps"), list):
+                plan[:] = [s for s in event["steps"] if isinstance(s, dict)]
+            elif stage == "step_started" and event.get("step_id"):
+                statuses[str(event["step_id"])] = "running"
+            elif stage == "step_finished" and event.get("step_id"):
+                statuses[str(event["step_id"])] = str(event.get("status") or "completed")
+            status.update(label=f"{event.get('label', 'Working')}…")
+            if plan:
+                rows = vm.plan_rows(plan, statuses)
+                checklist.markdown(
+                    "\n".join(f"{r.mark} {vm.escape_markdown(r.title)}" for r in rows), unsafe_allow_html=False
+                )
+
+        try:
+            current["response"] = client.investigate_stream(
+                objective, session_id=st.session_state.session_id, on_progress=on_progress
+            )
+            status.update(label="Investigation complete", state="complete", expanded=False)
+        except APIFailure as failure:
+            current["failure"] = failure
+            status.update(label="The investigation could not be completed", state="error")
+    entry = vm.investigation_history_entry(objective, response=current["response"], failure=current["failure"])
+    st.session_state.history = vm.bounded_history(st.session_state.history, entry, get_settings().ui_history_limit)
+    st.session_state.current = current
+
+
 def main() -> None:
     st.set_page_config(page_title=TITLE, page_icon=":material/insights:", layout="wide")
     _init_state()
@@ -138,6 +189,34 @@ def main() -> None:
     st.caption(DESCRIPTION)
 
     limits = (capabilities or {}).get("limits") or {}
+    mode = st.radio("Mode", MODES, horizontal=True, key="mode", label_visibility="collapsed")
+    if mode == MODES[1]:
+        _investigation_form(client, capabilities, limits)
+    else:
+        _question_form(client, capabilities, limits)
+
+    current = st.session_state.current
+    if current:
+        st.divider()
+        if current.get("kind") == "investigation":
+            if current["response"] is not None:
+                render.render_investigation(current["response"])
+            elif current["failure"] is not None:
+                st.markdown(f"**Objective:** {vm.escape_markdown(current['question'])}")
+                render.render_error(current["failure"])
+        else:
+            st.markdown(f"**Q:** {vm.escape_markdown(current['question'])}")
+            if current["response"] is not None:
+                render.render_response(current["response"])
+            elif current["failure"] is not None:
+                render.render_error(current["failure"])
+    earlier = st.session_state.history[1:] if current else st.session_state.history
+    if earlier:
+        st.divider()
+        render.render_history(earlier)
+
+
+def _question_form(client: AgentOpsClient, capabilities: dict[str, Any] | None, limits: dict[str, Any]) -> None:
     with st.form("ask", border=False):
         st.text_area(
             "Your question",
@@ -161,18 +240,32 @@ def main() -> None:
         else:
             st.warning("Type a question first.")
 
-    current = st.session_state.current
-    if current:
-        st.divider()
-        st.markdown(f"**Q:** {vm.escape_markdown(current['question'])}")
-        if current["response"] is not None:
-            render.render_response(current["response"])
-        elif current["failure"] is not None:
-            render.render_error(current["failure"])
-    earlier = st.session_state.history[1:] if current else st.session_state.history
-    if earlier:
-        st.divider()
-        render.render_history(earlier)
+
+def _investigation_form(client: AgentOpsClient, capabilities: dict[str, Any] | None, limits: dict[str, Any]) -> None:
+    st.caption(
+        "Investigate a business issue: AgentOps plans several analysis steps, runs them through the same secured "
+        "tools, validates the findings and writes an evidence-backed decision brief."
+    )
+    with st.form("investigate", border=False):
+        st.text_area(
+            "Business issue to investigate",
+            key="objective",
+            height=100,
+            max_chars=int(limits.get("max_question_chars") or get_settings().agent_max_question_chars),
+            placeholder="e.g. Why is revenue growth slowing?",
+        )
+        submitted = st.form_submit_button("Investigate", type="primary")
+    examples = vm.example_objectives(capabilities, EXAMPLE_OBJECTIVES)
+    st.caption("Try an investigation:")
+    columns = st.columns(3)
+    for index, example in enumerate(examples[:6]):
+        columns[index % 3].button(example, key=f"objective-{index}", on_click=_use_objective, args=(example,))
+    objective = str(st.session_state.objective or "")
+    if submitted or st.session_state.pop("run_objective", False):
+        if objective.strip():
+            _investigate(client, objective)
+        else:
+            st.warning("Describe the business issue first.")
 
 
 if __name__ == "__main__":  # `streamlit run` executes the page as __main__

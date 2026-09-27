@@ -16,7 +16,7 @@ from app.analytics.kpis import KPIResult, get_kpi_definition
 from app.analytics.models import AnalyticsResult, Scalar
 from app.analytics.periods import Period
 from app.anomalies import AnomalyReport, AnomalyResult
-from app.evidence.formatting import format_money_change, format_percent, format_value
+from app.evidence.formatting import format_money_change, format_number, format_percent, format_value
 from app.evidence.models import Evidence, EvidenceGraph, EvidenceStatus, EvidenceType
 from app.forecasting import ForecastResult
 from app.tools.base import ToolResult
@@ -634,7 +634,7 @@ def _fmt_field(key: str, value: Any) -> str:
         return format_percent(value)
     if any(t in key for t in ("revenue", "spend", "value", "mrr", "cac")):
         return format_value(value, "SGD")
-    return format_value(value, "count") if isinstance(value, int) else f"{value:,.4g}"
+    return format_value(value, "count") if isinstance(value, int) else format_number(value)
 
 
 def _generic_summary(c: _Collector, r: AnalyticsResult[Any]) -> None:

@@ -15,7 +15,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import get_args
 
-from app.agent.records import AgentStatus
+from app.agent.records import AgentStatus, ToolCallRecord
 from app.agent.response import trace_entries
 from app.agent.runner import AgentRunResult
 from app.anomalies import AnomalyReport
@@ -34,6 +34,7 @@ from app.api.schemas.responses import (
 from app.api.visualizations import build_visualizations
 from app.evidence.models import Claim, Evidence
 from app.forecasting import ForecastResult
+from app.tools import ToolResult
 from app.tools.views import AnomalyReportView, ForecastView
 
 MAX_KPIS = 8
@@ -98,7 +99,7 @@ def classify(result: AgentRunResult) -> tuple[Outcome, Refusal | None]:
     return "failed", None
 
 
-def _citations(claims: list[Claim]) -> dict[str, list[Claim]]:
+def _citations(claims: Sequence[Claim]) -> dict[str, list[Claim]]:
     citing: dict[str, list[Claim]] = defaultdict(list)
     for claim in claims:
         for evidence_id in claim.evidence_ids:
@@ -119,13 +120,17 @@ def _is_headline(e: Evidence) -> bool:
 
 def kpi_values(result: AgentRunResult) -> list[KPIValue]:
     """Headline evidence, ordered: cited by a primary claim, then cited, then the rest (evidence order)."""
-    citing = _citations(result.claims)
+    return kpi_values_of(result.evidence, result.claims)
+
+
+def kpi_values_of(evidence: Sequence[Evidence], claims_list: Sequence[Claim]) -> list[KPIValue]:
+    citing = _citations(claims_list)
 
     def rank(e: Evidence) -> int:
         claims = citing.get(e.evidence_id, [])
         return 0 if any(c.primary for c in claims) else 1 if claims else 2
 
-    headline = sorted((e for e in result.evidence if _is_headline(e)), key=rank)[:MAX_KPIS]
+    headline = sorted((e for e in evidence if _is_headline(e)), key=rank)[:MAX_KPIS]
     values = []
     for e in headline:
         claims = citing.get(e.evidence_id, [])
@@ -155,7 +160,11 @@ def kpi_values(result: AgentRunResult) -> list[KPIValue]:
 
 def trace_steps(result: AgentRunResult) -> list[TraceStep]:
     purposes = {s.step_id: s.purpose for plan in result.plans for s in plan.steps}
-    safe = trace_entries(result.tool_trace)  # the user-facing summary and error category of each call
+    return trace_steps_of(result.tool_trace, purposes)
+
+
+def trace_steps_of(calls: Sequence[ToolCallRecord], purposes: dict[str, str]) -> list[TraceStep]:
+    safe = trace_entries(calls)  # the user-facing summary and error category of each call
     return [
         TraceStep(
             step=index,
@@ -173,22 +182,28 @@ def trace_steps(result: AgentRunResult) -> list[TraceStep]:
             evidence_ids=call.evidence_ids,
             error=entry.error,
         )
-        for index, (call, entry) in enumerate(zip(result.tool_trace, safe, strict=True), start=1)
+        for index, (call, entry) in enumerate(zip(calls, safe, strict=True), start=1)
     ]
 
 
-def _evidence_by_call(result: AgentRunResult) -> dict[str, list[str]]:
+def _evidence_by_call(evidence: Sequence[Evidence]) -> dict[str, list[str]]:
     by_call: dict[str, list[str]] = defaultdict(list)
-    for e in result.evidence:
+    for e in evidence:
         by_call[e.tool_call_id].append(e.evidence_id)
     return by_call
 
 
 def forecast_sections(result: AgentRunResult) -> list[tuple[ForecastSection, ForecastResult]]:
     """Forecast results that produced evidence in this run (a result without evidence is not shown)."""
-    by_call = _evidence_by_call(result)
+    return forecast_sections_of(result.tool_results, result.evidence)
+
+
+def forecast_sections_of(
+    tool_results: Sequence[ToolResult], evidence: Sequence[Evidence]
+) -> list[tuple[ForecastSection, ForecastResult]]:
+    by_call = _evidence_by_call(evidence)
     sections = []
-    for r in result.tool_results:
+    for r in tool_results:
         if r.success and isinstance(r.result, ForecastResult) and by_call.get(r.call_id):
             section = ForecastSection(
                 call_id=r.call_id,
@@ -201,9 +216,15 @@ def forecast_sections(result: AgentRunResult) -> list[tuple[ForecastSection, For
 
 
 def anomaly_sections(result: AgentRunResult) -> list[tuple[AnomalySection, AnomalyReport]]:
-    by_call = _evidence_by_call(result)
+    return anomaly_sections_of(result.tool_results, result.evidence)
+
+
+def anomaly_sections_of(
+    tool_results: Sequence[ToolResult], evidence: Sequence[Evidence]
+) -> list[tuple[AnomalySection, AnomalyReport]]:
+    by_call = _evidence_by_call(evidence)
     sections = []
-    for r in result.tool_results:
+    for r in tool_results:
         if r.success and isinstance(r.result, AnomalyReport) and by_call.get(r.call_id):
             section = AnomalySection(
                 call_id=r.call_id,

@@ -32,3 +32,27 @@ class AskRequest(BaseModel):
         pattern=ID_PATTERN,
         description="Optional client session ID, echoed back and logged. Nothing is stored per session.",
     )
+
+
+class InvestigationRequest(BaseModel):
+    """The request body of ``POST /api/v1/investigations`` (and ``/investigations/stream``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    objective: StrictStr = Field(
+        min_length=1,
+        max_length=MAX_QUESTION_CHARS,
+        description="A business issue to investigate, or a request for a management brief.",
+        examples=["Why is revenue growth slowing?"],
+    )
+    request_id: StrictStr | None = Field(
+        default=None,
+        pattern=ID_PATTERN,
+        description="Optional client correlation ID (also accepted as the X-Request-ID header). "
+        "It becomes the investigation ID; one is generated when absent.",
+    )
+    session_id: StrictStr | None = Field(
+        default=None,
+        pattern=ID_PATTERN,
+        description="Optional client session ID, echoed back and logged. Nothing is stored per session.",
+    )
