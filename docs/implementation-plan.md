@@ -457,7 +457,7 @@ Note: the top-level `mcp/` directory name would shadow the `mcp` SDK package whe
 | 8 | FastAPI; Streamlit (7 pages) | API integration tests pass; Streamlit AppTest smoke passes; manual startup verified |
 | 9 | Production hardening and deployment readiness: authentication, rate limiting, safe configuration, structured logs, metrics, health/readiness, bounded runs, graceful shutdown, Docker, CI | Security, API, deployment and benchmark suites pass; Docker smoke test passes |
 | 10 | Investigation and decision intelligence: multi-step investigations, cross-finding validation, driver analysis, grounded recommendations, decision briefs, investigation API and UI mode, eval_v2 | eval_v1 unchanged and passing; eval_v2 (50+ scenarios) passing, including multi-seed; security and MCP suites pass |
-| 11 | Full QA: pytest, evaluation, ruff, mypy, API health, UI startup; README, docs, business case, demo scenarios; final engineering report | All quality-bar items checked with evidence |
+| 11 | Final polish and release readiness: README, final architecture, evaluation, demo guide, doc accuracy, small UI polish, full validation | All quality-bar items checked with evidence (final phase) |
 
 After each phase: run tests → inspect outputs → fix → update docs → commit and push to `claude/agentops-ai-agent-39zngk`.
 
@@ -951,3 +951,24 @@ Fixes found while building Phase 10, each with a regression test:
   quarter.
 
 The eval_v1 scenarios and thresholds and the security policy are unchanged.
+
+### Phase 11 (final polish and release readiness) — complete
+
+Phase 11 is the final phase. It adds no features and no architecture; it takes the repository from
+feature-complete to release-ready.
+
+- **Documentation.**
+  - The README is rewritten product-first: overview, capabilities, architecture, example questions,
+    trust model, security, evaluation, running locally, limitations and deferred improvements.
+  - New: [final-architecture.md](final-architecture.md) and [demo.md](demo.md).
+  - A final-results section in [evaluation.md](evaluation.md), and a release verification table in
+    [security.md](security.md).
+  - Drift fixed in [api.md](api.md), [ui.md](ui.md) and [security.md](security.md): the rate limit
+    and content-type rules cover the investigation endpoints too.
+- **UI polish.**
+  - Investigation finding cards now say what their label means, as the Ask mode's cards already did.
+  - Recommendations say they are a suggested next step, not a finding.
+  - The sidebar's history note covers investigations.
+- **Version.** It stays 0.10.0: nothing in Phase 11 changes the API or the images' behaviour.
+- **Deferred improvements** are listed in the README; they are out of scope by design.
+

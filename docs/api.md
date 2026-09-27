@@ -16,7 +16,7 @@ chart specifications. It adds no analytics, SQL, planning or permissions of its 
 
 - Every endpoint except `/health` and `/readiness` requires `Authorization: Bearer
   <API_AUTH_TOKEN>`.
-- The ask endpoints are rate-limited per client.
+- The ask and investigation endpoints share one per-client rate limit.
 - The API refuses to start with an unsafe configuration.
 
 Operation (configuration, Docker, logs, metrics, shutdown): [deployment.md](deployment.md).
