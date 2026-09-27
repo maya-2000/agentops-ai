@@ -18,6 +18,10 @@ the runner is created and never taken from a question, a plan or a tool result.
 | MAX_SQL_LENGTH        | max_sql_length         | AGENT_MAX_SQL_LENGTH            |
 | MAX_RESPONSE_LENGTH   | max_response_chars     | AGENT_MAX_RESPONSE_CHARS        |
 | MAX_CONTEXT_ITEMS     | max_context_items      | AGENT_MAX_CONTEXT_ITEMS         |
+
+Investigations (Phase 10) add their own caps, enforced by the same budget objects (``RunBudget``):
+``max_investigation_steps``, ``max_investigation_tool_calls``, ``max_investigation_seconds``,
+``max_investigation_evidence`` and ``max_investigation_output_chars`` (``AGENT_MAX_INVESTIGATION_*``).
 """
 
 from __future__ import annotations
@@ -64,6 +68,13 @@ class SecurityLimits(BaseModel):
     max_context_items: int = Field(default=40, ge=5, le=500)  # evidence/claim items sent to the model per call
     max_context_chars: int = Field(default=60000, ge=2000, le=1000000)  # rendered prompt size per model call
     max_response_chars: int = Field(default=4000, ge=200, le=20000)
+
+    # ---- investigations (Phase 10): one objective, several template steps, one shared budget
+    max_investigation_steps: int = Field(default=14, ge=1, le=40)  # planned steps that may run
+    max_investigation_tool_calls: int = Field(default=16, ge=1, le=60)  # tool calls across all steps
+    max_investigation_seconds: float = Field(default=120.0, gt=0)  # wall clock of one investigation
+    max_investigation_evidence: int = Field(default=400, ge=10, le=5000)  # evidence items one investigation keeps
+    max_investigation_output_chars: int = Field(default=12000, ge=1000, le=100000)  # decision brief text
 
     @model_validator(mode="before")
     @classmethod

@@ -47,6 +47,11 @@ class AgentConfig(SecurityLimits):
             llm_max_tokens=s.llm_max_tokens,
             llm_temperature=s.llm_temperature,
             disabled_tools=disabled,
+            max_investigation_steps=s.agent_max_investigation_steps,
+            max_investigation_tool_calls=s.agent_max_investigation_tool_calls,
+            max_investigation_seconds=s.agent_max_investigation_seconds,
+            max_investigation_evidence=s.agent_max_investigation_evidence,
+            max_investigation_output_chars=s.agent_max_investigation_output_chars,
         )
 
     @property
