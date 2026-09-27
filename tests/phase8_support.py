@@ -21,11 +21,14 @@ from tests.phase5_support import runner
 ASK = "/api/v1/ask"
 STREAM = "/api/v1/ask/stream"
 HEALTH = "/api/v1/health"
+READINESS = "/api/v1/readiness"
 CAPABILITIES = "/api/v1/capabilities"
 METRICS = "/api/v1/metrics"
 
 
 def api_config(**overrides: Any) -> APIConfig:
+    # Phase 8 tests exercise the contract without authentication or rate limiting (both are covered,
+    # enabled, by the Phase 9 tests in tests/api/test_api_production.py).
     values: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 8000,
@@ -33,6 +36,8 @@ def api_config(**overrides: Any) -> APIConfig:
         "max_request_bytes": 16384,
         "max_pending_requests": 4,
         "max_question_chars": 1000,
+        "auth_mode": "disabled",
+        "rate_limit": None,
     }
     values.update(overrides)
     return APIConfig(**values)
@@ -83,6 +88,37 @@ class Borrowed:
 
 def ask(client: TestClient, question: str, **body: Any) -> dict[str, Any]:
     response = client.post(ASK, json={"question": question, **body})
+    assert response.status_code == 200, response.text
+    data: dict[str, Any] = response.json()
+    return data
+
+
+# ---- Phase 9: a production-like configuration (token authentication and rate limiting on) -------------
+
+TOKEN = "test-token-" + "k" * 40  # a test-only value (never a real credential)
+AUTH = {"Authorization": f"Bearer {TOKEN}"}
+READ_HEADERS = {**AUTH}
+
+
+def production_api(**overrides: Any) -> dict[str, Any]:
+    """APIConfig overrides for a secured API: token auth, a rate limit, production environment."""
+    from pydantic import SecretStr
+
+    from app.api.config import RateLimit
+
+    values: dict[str, Any] = {
+        "environment": "production",
+        "auth_mode": "token",
+        "auth_token": SecretStr(TOKEN),
+        "rate_limit": RateLimit(requests=1000, window_seconds=60.0),
+        "docs_enabled": False,
+    }
+    values.update(overrides)
+    return values
+
+
+def ask_secured(client: TestClient, question: str, **body: Any) -> dict[str, Any]:
+    response = client.post(ASK, json={"question": question, **body}, headers=AUTH)
     assert response.status_code == 200, response.text
     data: dict[str, Any] = response.json()
     return data

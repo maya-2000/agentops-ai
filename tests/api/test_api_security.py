@@ -346,7 +346,7 @@ def test_api_logs_hold_no_question_answer_or_data(client: Any, caplog: pytest.Lo
         "event",
         "session_id",
         "method",
-        "path",
+        "endpoint",  # the matched route template (Phase 9: raw paths are no longer logged)
         "status_code",
         "agent_status",
         "outcome",

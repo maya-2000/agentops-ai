@@ -66,6 +66,7 @@ from app.analytics.errors import InvalidRequestError
 from app.analytics.executor import QueryRunner
 from app.analytics.kpis import list_kpi_definitions
 from app.database.base import Database
+from app.database.deadline import remaining_seconds
 from app.evidence.builder import build_evidence, evidence_summary
 from app.evidence.models import EvidenceGraph
 from app.evidence.validation import ResponseValidationResult, validate_evidence, validate_response
@@ -236,6 +237,12 @@ class AgentRuntime:
             self._business_context = business_context([row[0] for row in rows.rows])
         return self._business_context
 
+    def _llm_wait_seconds(self) -> float:
+        """The model-call timeout, shortened to the run's deadline when a caller bounded the run."""
+        remaining = remaining_seconds()
+        limit = self.config.llm_timeout_seconds
+        return limit if remaining is None else max(0.0, min(limit, remaining))
+
     def call_llm(
         self,
         run_id: str,
@@ -295,7 +302,7 @@ class AgentRuntime:
             )
             code: str
             try:
-                response = call_with_timeout(partial(self.llm.generate, request), self.config.llm_timeout_seconds)
+                response = call_with_timeout(partial(self.llm.generate, request), self._llm_wait_seconds())
             except CallTimeoutError as exc:
                 errors.append(f"model call timed out: {exc}")
                 code = "llm_timeout"

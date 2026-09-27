@@ -1,0 +1,9 @@
+# Allow-list: only what the images need reaches the build context.
+# Never included: .env and other secrets, the DuckDB database, data/ (generator, hidden ground-truth seeds,
+# metadata), tests/, evals/, reports/, docs/, .git/ and local caches.
+*
+!pyproject.toml
+!README.md
+!app/
+**/__pycache__
+**/*.pyc
