@@ -134,6 +134,21 @@ _ISO_MONTH = re.compile(r"\b(20\d{2})-(0[1-9]|1[0-2])\b(?!-\d)")
 _ISO_DATE = r"20\d{2}-\d{2}-\d{2}"
 _ISO_RANGE = re.compile(rf"\b({_ISO_DATE})(?:\s+(?:to|until|through|-|\u2013)\s+|\.\.)({_ISO_DATE})\b")
 _ISO_DAY = re.compile(rf"\b{_ISO_DATE}\b")
+# A day of a month in words: "3 March YYYY", "the 3rd of March", "March 3", "March 3rd, YYYY". A day
+# number next to a month name names one day, never the month. "March YYYY" and "during March" do not
+# match: a four-digit year is not a day, and "3 months" / "3 weeks" are durations.
+_MONTH_NAME = (
+    r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|"
+    r"oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+)
+_DAY_NUMBER = r"(?:0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?"
+_DAY_OF_MONTH = re.compile(
+    rf"\b{_DAY_NUMBER}\s+(?:of\s+)?{_MONTH_NAME}\b"
+    rf"|\b{_MONTH_NAME}\.?\s+{_DAY_NUMBER}\b(?!\s*(?:months?|weeks?|days?|years?|quarters?|%|\d))",
+    re.IGNORECASE,
+)
+# 03/04/YYYY or 3.4.YY: a single day, and ambiguous (day-month or month-day order).
+_NUMERIC_DATE = re.compile(r"\b\d{1,2}[/.]\d{1,2}[/.](?:20)?\d{2}\b")
 _ISO_QUARTER = re.compile(r"\b(20\d{2})-q([1-4])\b")
 
 
@@ -178,7 +193,9 @@ def understand(context: dict[str, Any]) -> dict[str, Any]:
     material = False
     if day_level:
         ambiguities.append(
-            "Day-level dates are not supported; ask for a month, quarter or year (for example 2026-07 or 2026-Q2)."
+            "A single day was asked for, but KPIs are reported for whole months, quarters or years, so a day's "
+            'value is not available. Ask for the whole month (for example "revenue in March", or YYYY-MM) or a '
+            "quarter (YYYY-Qn)."
         )
         material = True
     if analysis == "lowest" and dimensions and _change_ranking(q, metric):
@@ -349,6 +366,8 @@ def _periods(q: str, as_of: date) -> tuple[list[str], list[str], bool]:
         if not any(start <= match.start() < end for start, end in iso_spans):
             iso_spans.append(match.span())
             day_level = True
+    if any(_names_a_day(q, m) for m in _DAY_OF_MONTH.finditer(q)) or _NUMERIC_DATE.search(q):
+        day_level = True
     for phrase, spec in (
         ("last month", "last_month"),
         ("this month", "last_month"),
@@ -404,6 +423,15 @@ def _periods(q: str, as_of: date) -> tuple[list[str], list[str], bool]:
         else:
             periods.append(spec)
     return periods, comparisons, day_level
+
+
+def _names_a_day(q: str, match: re.Match[str]) -> bool:
+    """A day-of-month match, unless its month word is the verb "may" ("the top 3 may change")."""
+    month = (match.group(1) or match.group(2) or "").lower()
+    if month != "may":
+        return True
+    after = q[match.end() :]
+    return bool(re.match(r"\s*(?:,?\s*20\d{2}\b|[?.!,;]|$)", after)) or match.group(0).lower().startswith("may")
 
 
 def _range_spec(start: date, end: date) -> str | None:

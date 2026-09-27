@@ -68,7 +68,9 @@ def validate_understanding(u: UnderstandingOutput, *, as_of: date, coverage: tup
     if u.intent == Intent.UNSUPPORTED:
         return RequestValidation(outcome="unsupported", message=u.unsupported_reason or "The request is out of scope.")
     if u.material_ambiguity:
-        detail = "; ".join(u.ambiguities) or "the question can be read in more than one materially different way"
+        detail = "; ".join(a.rstrip(". ") for a in u.ambiguities) or (
+            "the question can be read in more than one materially different way"
+        )
         return RequestValidation(outcome="clarify", message=f"Please clarify: {detail}.")
 
     assumptions: list[str] = []
