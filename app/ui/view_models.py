@@ -677,6 +677,8 @@ def error_view(failure: APIFailure) -> ErrorView:
         "rate_limited": "Too many questions in a short time. Wait a moment, then ask again.",
         "empty_question": "Type a question first.",
         "question_too_long": "Shorten the question.",
+        "empty_objective": "Describe the business issue first.",
+        "objective_too_long": "Shorten the objective.",
         "busy": "Another analysis is running. Try again in a few seconds.",
         "timeout": "Try a narrower question.",
         "agent_unavailable": "Check that the database has been generated and restart the API.",
@@ -692,6 +694,7 @@ class HistoryEntry:
     answer: str
     request_id: str | None
     asked_at: str
+    kind: str = "question"  # "question" (/ask) or "investigation" (Phase 10)
 
 
 MAX_HISTORY_TEXT_CHARS = 1000
@@ -737,4 +740,278 @@ def visualization_groups(response: Json) -> dict[str, list[Json]]:
 def examples(capabilities: Json | None, fallback: Sequence[str]) -> list[str]:
     """Example questions from the API's capabilities, else the UI's own list."""
     listed = capabilities.get("example_questions") if capabilities else None
+    return [str(q) for q in listed] if isinstance(listed, list) and listed else list(fallback)
+
+
+# ------------------------------------------------------------------------------------------ investigations (Phase 10)
+
+INVESTIGATION_BANNERS: dict[str, Banner] = {
+    **OUTCOME_BANNERS,
+    "answered": Banner("success", "Investigation complete"),
+    "partial": Banner(
+        "warning",
+        "Investigation stopped: the analysis budget was reached",
+        "Only the steps that ran are reported; no drivers or recommendations were derived.",
+    ),
+    "insufficient_evidence": Banner(
+        "warning",
+        "The evidence is not sufficient for a conclusion.",
+        "The findings below show what was observed. Rephrase the objective with a metric and a period, or ask a "
+        "narrower question.",
+    ),
+}
+STEP_MARKS = {
+    "completed": "✓",
+    "reused": "↺",
+    "skipped": "⊘",
+    "failed": "✗",
+    "not_run": "○",
+    "pending": "○",
+    "running": "⟳",
+}
+RELATIONSHIP_LABELS = {
+    "contributes_to": "Contributes to the change (accounting share)",
+    "supports": "Moved in line with the outcome (same period)",
+    "correlates_with": "Associated (observed before churn)",
+    "contradicts": "Moved the other way",
+    "contextualizes": "Context",
+}
+AREA_TITLES = {
+    "revenue": "Revenue",
+    "customers": "Customers",
+    "sales": "Sales",
+    "marketing": "Marketing",
+    "product": "Product",
+    "support": "Support",
+    "anomalies": "Anomalies",
+    "forecast": "Forecast",
+}
+
+
+@dataclass(frozen=True)
+class InvestigationView:
+    outcome: str
+    status: str
+    banner: Banner
+    title: str
+    objective: str
+    summary: str
+    message: str | None
+    period: str | None
+    request_id: str
+    uncertainty: list[str]
+    assumptions: list[str]
+    refusal_note: str | None
+    complete: bool
+    show_analysis: bool
+
+
+def investigation_view(response: Json) -> InvestigationView:
+    outcome = str(response.get("outcome", "failed"))
+    brief = response.get("brief") or {}
+    refusal = response.get("refusal") or None
+    scope = response.get("scope") or {}
+    summary = str(brief.get("executive_summary") or response.get("message") or "")
+    return InvestigationView(
+        outcome=outcome,
+        status=str(response.get("status", "")),
+        banner=INVESTIGATION_BANNERS.get(outcome, INVESTIGATION_BANNERS["failed"]),
+        title=str(response.get("title") or "Investigation"),
+        objective=str(response.get("objective", "")),
+        summary=summary,
+        message=str(response["message"]) if response.get("message") and brief else None,
+        period=_period_text(response.get("period"), response.get("comparison_period")),
+        request_id=str(response.get("request_id", "")),
+        uncertainty=[str(u) for u in brief.get("uncertainty", [])],
+        assumptions=[str(a) for a in scope.get("assumptions", [])],
+        refusal_note=REFUSAL_GUIDANCE.get(str(refusal.get("kind"))) if refusal else None,
+        complete=bool(brief.get("complete", True)),
+        show_analysis=bool(response.get("findings")) and outcome not in ("refused", "unsupported"),
+    )
+
+
+@dataclass(frozen=True)
+class PlanRow:
+    step_id: str
+    mark: str
+    title: str
+    area: str
+    tool: str
+    status: str
+    duration: str
+    detail: str
+
+
+def plan_rows(steps: Sequence[Json], statuses: Mapping[str, str] | None = None) -> list[PlanRow]:
+    """The analysis plan as a checklist: ✓ completed, ↺ reused, ⟳ running, ○ not run yet, ⊘ skipped, ✗ failed.
+
+    ``statuses`` (step ID -> status) overrides the steps' own status while an investigation is streaming.
+    """
+    rows = []
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        step_id = str(step.get("step_id", ""))
+        status = str((statuses or {}).get(step_id) or step.get("status") or "pending")
+        reason = step.get("reason")
+        reused = step.get("reused_from")
+        detail = str(reason) if reason else f"reused the result of {reused}" if reused else ""
+        rows.append(
+            PlanRow(
+                step_id=step_id,
+                mark=STEP_MARKS.get(status, "○"),
+                title=str(step.get("title", "")),
+                area=AREA_TITLES.get(str(step.get("area")), str(step.get("area", ""))),
+                tool=TOOL_LABELS.get(str(step.get("tool_name")), str(step.get("tool_name", ""))),
+                status=status.replace("_", " "),
+                duration=format_ms(step.get("duration_ms")) if step.get("duration_ms") else "",
+                detail=detail,
+            )
+        )
+    return rows
+
+
+@dataclass(frozen=True)
+class FindingItem:
+    finding_id: str
+    style: ClaimStyle
+    text: str
+    primary: bool
+    area: str
+    evidence_ids: list[str]
+    marker: ClaimStyle | None = None
+
+
+def _findings_by_id(response: Json) -> dict[str, Json]:
+    return {str(f.get("finding_id")): f for f in response.get("findings", []) if isinstance(f, Mapping)}
+
+
+def finding_items(response: Json, finding_ids: Sequence[str] | None = None) -> list[FindingItem]:
+    """Findings (by default the brief's key findings), labelled Observed / Calculated / Inferred / Recommended."""
+    by_id = _findings_by_id(response)
+    brief = response.get("brief") or {}
+    ids = list(finding_ids) if finding_ids is not None else [str(i) for i in brief.get("key_finding_ids", [])]
+    items = []
+    for finding_id in ids:
+        f = by_id.get(finding_id)
+        if f is None:
+            continue
+        kind = str(f.get("claim_type"))
+        items.append(
+            FindingItem(
+                finding_id=finding_id,
+                style=CLAIM_STYLES.get(kind, ClaimStyle(kind.replace("_", " ").title(), "gray", ":material/info:", "")),
+                text=str(f.get("text", "")),
+                primary=bool(f.get("primary")),
+                area=AREA_TITLES.get(str(f.get("area")), str(f.get("area", ""))),
+                evidence_ids=[str(e) for e in f.get("evidence_ids", [])],
+                marker=KIND_MARKERS.get(str(f.get("kind"))),
+            )
+        )
+    return items
+
+
+@dataclass(frozen=True)
+class DriverItem:
+    driver_id: str
+    name: str
+    relationship: str
+    relationship_label: str
+    statement: str
+    magnitude: str | None
+    share: str | None
+    confidence: str
+    finding_ids: list[str]
+    evidence_ids: list[str]
+
+
+def driver_items(drivers: Sequence[Json]) -> list[DriverItem]:
+    items = []
+    for d in drivers:
+        if not isinstance(d, Mapping):
+            continue
+        relationship = str(d.get("relationship", ""))
+        share = d.get("share")
+        items.append(
+            DriverItem(
+                driver_id=str(d.get("driver_id", "")),
+                name=str(d.get("name", "")),
+                relationship=relationship,
+                relationship_label=RELATIONSHIP_LABELS.get(relationship, relationship.replace("_", " ")),
+                statement=str(d.get("statement", "")),
+                magnitude=str(d["magnitude"]) if d.get("magnitude") else None,
+                share=f"{format_percent(share)} of the gross change" if isinstance(share, (int, float)) else None,
+                confidence=str(d.get("confidence", "")),
+                finding_ids=[str(i) for i in d.get("finding_ids", [])],
+                evidence_ids=[str(e) for e in d.get("evidence_ids", [])],
+            )
+        )
+    return items
+
+
+@dataclass(frozen=True)
+class RecommendationItem:
+    text: str
+    rationale: str
+    uncertainty: str | None
+    finding_ids: list[str]
+
+
+def recommendation_items(response: Json) -> list[RecommendationItem]:
+    brief = response.get("brief") or {}
+    return [
+        RecommendationItem(
+            text=str(r.get("text", "")),
+            rationale=str(r.get("rationale", "")),
+            uncertainty=str(r["uncertainty"]) if r.get("uncertainty") else None,
+            finding_ids=[str(i) for i in r.get("supporting_finding_ids", [])],
+        )
+        for r in brief.get("recommendations", [])
+        if isinstance(r, Mapping)
+    ]
+
+
+@dataclass(frozen=True)
+class SectionItem:
+    title: str
+    findings: list[FindingItem]
+
+
+def section_items(response: Json) -> list[SectionItem]:
+    """Management-brief sections (only areas that produced validated findings)."""
+    brief = response.get("brief") or {}
+    return [
+        SectionItem(
+            title=str(s.get("title", "")), findings=finding_items(response, [str(i) for i in s.get("finding_ids", [])])
+        )
+        for s in brief.get("sections", [])
+        if isinstance(s, Mapping)
+    ]
+
+
+def investigation_history_entry(
+    objective: str, *, response: Json | None = None, failure: APIFailure | None = None
+) -> HistoryEntry:
+    """What the session keeps of one investigation: the redacted objective, the outcome and a bounded summary."""
+    now = datetime.now().strftime("%H:%M:%S")
+    if response is not None:
+        stored = response.get("objective")
+        brief = response.get("brief") or {}
+        summary = brief.get("executive_summary") or response.get("message") or ""
+        return HistoryEntry(
+            question=(str(stored) if isinstance(stored, str) and stored else objective)[:MAX_HISTORY_TEXT_CHARS],
+            outcome=str(response.get("outcome", "")),
+            answer=str(summary)[:MAX_HISTORY_TEXT_CHARS],
+            request_id=str(response.get("request_id", "")) or None,
+            asked_at=now,
+            kind="investigation",
+        )
+    message = failure.message if failure else "No response."
+    request_id = failure.request_id if failure else None
+    return HistoryEntry(objective[:MAX_HISTORY_TEXT_CHARS], "error", message, request_id, now, kind="investigation")
+
+
+def example_objectives(capabilities: Json | None, fallback: Sequence[str]) -> list[str]:
+    """Example investigation objectives from the API's capabilities, else the UI's own list."""
+    listed = capabilities.get("example_objectives") if capabilities else None
     return [str(q) for q in listed] if isinstance(listed, list) and listed else list(fallback)

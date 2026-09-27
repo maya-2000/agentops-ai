@@ -120,9 +120,23 @@ class AgentOpsClient:
         self, question: str, *, session_id: str | None = None, on_progress: Callable[[dict[str, Any]], None]
     ) -> dict[str, Any]:
         """Like ``ask``, calling ``on_progress`` with each progress event before the result arrives."""
-        payload = {"question": question, "session_id": session_id}
+        return self._stream("/ask/stream", {"question": question, "session_id": session_id}, on_progress)
+
+    def investigate(self, objective: str, *, session_id: str | None = None) -> dict[str, Any]:
+        """A multi-step investigation of a business issue (Phase 10): a decision brief with its evidence."""
+        return self._request("POST", "/investigations", json={"objective": objective, "session_id": session_id})
+
+    def investigate_stream(
+        self, objective: str, *, session_id: str | None = None, on_progress: Callable[[dict[str, Any]], None]
+    ) -> dict[str, Any]:
+        """Like ``investigate``, calling ``on_progress`` with each stage and step event before the result arrives."""
+        return self._stream("/investigations/stream", {"objective": objective, "session_id": session_id}, on_progress)
+
+    def _stream(
+        self, path: str, payload: dict[str, Any], on_progress: Callable[[dict[str, Any]], None]
+    ) -> dict[str, Any]:
         try:
-            with self._client() as client, client.stream("POST", API_PREFIX + "/ask/stream", json=payload) as response:
+            with self._client() as client, client.stream("POST", API_PREFIX + path, json=payload) as response:
                 if response.status_code >= 400:
                     response.read()
                     try:
