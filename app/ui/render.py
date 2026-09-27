@@ -215,6 +215,7 @@ def render_finding_cards(items: Sequence[vm.FindingItem]) -> None:
             with cols[1]:
                 st.markdown(f"**{esc(item.text)}**" if item.primary else esc(item.text))
                 notes = [item.finding_id, item.area, f"evidence {', '.join(item.evidence_ids) or 'none'}"]
+                notes.append(item.marker.note if item.marker else item.style.note)  # how to read this label
                 st.caption(esc(" · ".join(notes)))
 
 
@@ -286,7 +287,8 @@ def render_investigation(response: Mapping[str, Any]) -> vm.InvestigationView:
             with st.container(border=True):
                 st.badge("Recommended", icon=":material/assistant_direction:", color="violet")
                 st.markdown(esc(rec.text))
-                st.caption(esc(" · ".join(part for part in (rec.rationale, rec.uncertainty) if part)))
+                note = vm.CLAIM_STYLES["recommendation"].note
+                st.caption(esc(" · ".join(part for part in (note, rec.rationale, rec.uncertainty) if part)))
     for section in vm.section_items(response):
         with st.expander(f"{esc(section.title)} ({len(section.findings)} findings)"):
             render_finding_cards(section.findings)

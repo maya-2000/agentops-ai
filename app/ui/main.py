@@ -115,7 +115,8 @@ def _sidebar(client: AgentOpsClient, capabilities: dict[str, Any] | None, proble
             )
         st.markdown("### Session")
         st.caption(
-            f"The last {get_settings().ui_history_limit} questions and answers are kept in this browser session "
+            f"The last {get_settings().ui_history_limit} questions and investigations, with their results, are kept "
+            "in this browser session "
             "only; nothing is stored."
         )
         st.button("Clear history", on_click=_clear_history, disabled=not st.session_state.history)

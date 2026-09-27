@@ -186,6 +186,12 @@ def test_an_investigation_renders_the_decision_brief(served: None) -> None:
     assert {"Analysis plan", "Evidence & Provenance", "Analysis Trace"} <= expanders
     assert "✓" in text and "Running" not in text
     assert len(app.metric) >= 1
+    # Every finding card says how to read its label, as in Ask mode; recommendations say they are not findings.
+    captions = " ".join(str(c.value) for c in app.caption)
+    notes = {vm.CLAIM_STYLES[k].note for k in ("observed_fact", "calculated_result", "inference")}
+    assert any(vm.escape_markdown(note) in captions for note in notes)
+    if "#### Recommendations" in text:
+        assert vm.escape_markdown(vm.CLAIM_STYLES["recommendation"].note) in captions
 
 
 def test_an_example_objective_runs_an_investigation(served: None) -> None:
