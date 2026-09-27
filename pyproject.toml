@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentops"
-version = "0.1.0"
-description = "AgentOps: AI Business Intelligence & Decision Agent (portfolio project)"
+version = "0.10.0"
+description = "Evidence-grounded AI agent for business analytics, forecasting, anomaly detection and decision intelligence"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Maya Sukumar" }]
 requires-python = ">=3.11"
-# Dependencies are added phase by phase; only what the implemented phases use is listed.
+# Only what the project uses is listed.
 dependencies = [
     "duckdb>=1.5,<2",
     "numpy>=2.0,<3",
