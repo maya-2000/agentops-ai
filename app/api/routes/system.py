@@ -37,6 +37,7 @@ from app.api.schemas.responses import (
     ReadinessResponse,
 )
 from app.api.service import AgentService
+from app.investigation.templates import TEMPLATE_TITLES
 from app.timeseries import SERIES_METRICS
 from app.tools.registry import TOOL_DEFINITIONS
 
@@ -51,6 +52,15 @@ EXAMPLE_QUESTIONS = (
     "Are there any unusual customer or product trends?",
     "Which segment had the highest churn last month?",
     "Which customers are at risk?",
+)
+EXAMPLE_OBJECTIVES = (
+    "Why is revenue growth slowing?",
+    "Investigate the decline in revenue during the latest quarter.",
+    "Why is customer churn increasing?",
+    "Why are support tickets increasing and which customer segments are affected?",
+    "Investigate whether the recent revenue decline is related to customer churn, sales performance, or product "
+    "adoption.",
+    "Give me a management brief on the current state of the business.",
 )
 NOT_SUPPORTED = (
     "Questions outside the Northwind Cloud business dataset (news, weather, general knowledge).",
@@ -115,6 +125,8 @@ async def capabilities(request: Request) -> CapabilitiesResponse:
         ),
         example_questions=list(EXAMPLE_QUESTIONS),
         not_supported=list(NOT_SUPPORTED),
+        investigation_types=[NamedItem(key=key, name=title) for key, title in TEMPLATE_TITLES.items()],
+        example_objectives=list(EXAMPLE_OBJECTIVES),
     )
 
 

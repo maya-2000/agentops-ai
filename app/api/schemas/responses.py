@@ -244,6 +244,9 @@ class CapabilitiesResponse(BaseModel):
     limits: Limits
     example_questions: list[str]
     not_supported: list[str]
+    # Phase 10: the investigation templates (name and title) and example objectives.
+    investigation_types: list[NamedItem] = Field(default_factory=list)
+    example_objectives: list[str] = Field(default_factory=list)
 
 
 class LatencyStats(BaseModel):
