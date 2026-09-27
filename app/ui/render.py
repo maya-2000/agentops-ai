@@ -183,10 +183,146 @@ def render_history(entries: Sequence[vm.HistoryEntry]) -> None:
         return
     st.markdown("#### Earlier in this session")
     for entry in entries:
-        banner = vm.OUTCOME_BANNERS.get(entry.outcome)
+        banners = vm.INVESTIGATION_BANNERS if entry.kind == "investigation" else vm.OUTCOME_BANNERS
+        banner = banners.get(entry.outcome)
         status = banner.title if banner and entry.outcome != "answered" else entry.outcome.replace("_", " ")
-        with st.expander(f"{entry.asked_at} · {esc(entry.question)}"):
+        kind = "Investigation · " if entry.kind == "investigation" else ""
+        with st.expander(f"{entry.asked_at} · {kind}{esc(entry.question)}"):
             st.caption(esc(status))
             st.markdown(esc(entry.answer))
             if entry.request_id:
                 st.caption(f"Request ID: `{entry.request_id}`")
+
+
+# ------------------------------------------------------------------------------------------ investigations (Phase 10)
+
+
+def render_plan(rows: Sequence[vm.PlanRow]) -> None:
+    for row in rows:
+        duration = f" · {row.duration}" if row.duration else ""
+        detail = f" — {esc(row.detail)}" if row.detail else ""
+        st.markdown(f"{row.mark} **{esc(row.title)}** · {esc(row.tool)}{duration}{detail}")
+
+
+def render_finding_cards(items: Sequence[vm.FindingItem]) -> None:
+    for item in items:
+        with st.container(border=True):
+            cols = st.columns([1, 5], vertical_alignment="top")
+            with cols[0]:
+                st.badge(item.style.label, icon=item.style.icon, color=item.style.color)
+                if item.marker:
+                    st.badge(item.marker.label, icon=item.marker.icon, color=item.marker.color)
+            with cols[1]:
+                st.markdown(f"**{esc(item.text)}**" if item.primary else esc(item.text))
+                notes = [item.finding_id, item.area, f"evidence {', '.join(item.evidence_ids) or 'none'}"]
+                st.caption(esc(" · ".join(notes)))
+
+
+def render_drivers(title: str, items: Sequence[vm.DriverItem], caption: str) -> None:
+    if not items:
+        return
+    st.markdown(f"#### {title}")
+    st.caption(caption)
+    for item in items:
+        with st.container(border=True):
+            st.markdown(f"**{esc(item.name)}** · {esc(item.relationship_label)}")
+            st.markdown(esc(item.statement))
+            facts = [f for f in (item.share, f"confidence {item.confidence}" if item.confidence else None) if f]
+            facts.append(f"findings {', '.join(item.finding_ids)} · evidence {', '.join(item.evidence_ids)}")
+            st.caption(esc(" · ".join(facts)))
+
+
+def render_investigation(response: Mapping[str, Any]) -> vm.InvestigationView:
+    view = vm.investigation_view(response)
+    brief = response.get("brief") or {}
+    st.markdown("### Investigation")
+    st.markdown(f"**Objective:** {esc(view.objective)}")
+    meta = [esc(view.title)] + ([f"Period: {esc(view.period)}"] if view.period else [])
+    meta.append(f"Request ID: `{view.request_id}`")
+    st.caption(" · ".join(meta))
+    if view.outcome == "answered":
+        st.success(esc(view.banner.title))
+    else:
+        _banner(view.banner.level, view.banner.title)
+        if view.refusal_note:
+            st.caption(esc(view.refusal_note))
+        if view.banner.guidance:
+            st.caption(esc(view.banner.guidance))
+    rows = vm.plan_rows(response.get("plan", []))
+    if rows:
+        with st.expander(f"Analysis plan ({len(rows)} steps)", expanded=False):
+            render_plan(rows)
+    st.markdown("#### Executive summary")
+    st.markdown(esc(view.summary))
+    if view.message and view.outcome != "answered":
+        st.caption(esc(view.message))
+    if not view.show_analysis:
+        render_investigation_trace(response)
+        return view
+    findings = vm.finding_items(response)
+    if findings:
+        st.markdown("#### Key findings")
+        render_finding_cards(findings)
+    render_drivers(
+        "Drivers and contributing factors",
+        vm.driver_items(brief.get("drivers", [])),
+        "Observable factors associated with the outcome in the evidence: accounting contributions and same-period "
+        "co-movements. They are not established causes.",
+    )
+    render_drivers(
+        "Contradicting signals",
+        vm.driver_items(brief.get("contradictions", [])),
+        "Indicators that moved the other way: the evidence does not point to them.",
+    )
+    risks = brief.get("risks", [])
+    if risks:
+        st.markdown("#### Risks")
+        for risk in risks:
+            st.markdown(f"- {esc(risk.get('text', ''))}")
+    recommendations = vm.recommendation_items(response)
+    if recommendations:
+        st.markdown("#### Recommendations")
+        for rec in recommendations:
+            with st.container(border=True):
+                st.badge("Recommended", icon=":material/assistant_direction:", color="violet")
+                st.markdown(esc(rec.text))
+                st.caption(esc(" · ".join(part for part in (rec.rationale, rec.uncertainty) if part)))
+    for section in vm.section_items(response):
+        with st.expander(f"{esc(section.title)} ({len(section.findings)} findings)"):
+            render_finding_cards(section.findings)
+    if view.uncertainty:
+        st.markdown("#### Uncertainty")
+        for note in view.uncertainty:
+            st.markdown(f"- {esc(note)}")
+    if view.assumptions:
+        st.caption("Assumptions: " + esc(" ".join(view.assumptions)))
+    groups = vm.visualization_groups(response)
+    shown: set[str] = set()
+    if groups["kpi_card"] or groups["chart"]:
+        st.markdown("#### Visualizations")
+        render_kpis(groups["kpi_card"])
+        render_forecasts(response, shown)
+        render_anomalies(response, shown)
+        render_charts(groups["chart"], groups["table"], shown)
+    render_evidence(response)
+    render_investigation_trace(response)
+    return view
+
+
+def render_investigation_trace(response: Mapping[str, Any]) -> None:
+    rows = vm.trace_rows(response)
+    run = response.get("run") or {}
+    timings = run.get("timings") or {}
+    with st.expander("Analysis Trace"):
+        if not rows:
+            st.caption("No analysis steps were run.")
+        for row in rows:
+            duration = f" · {row.duration}" if row.duration else ""
+            detail = f" — {esc(row.detail)}" if row.detail else ""
+            st.markdown(f"{row.mark} **{esc(row.label)}**{duration}{detail}")
+        st.caption(
+            esc(
+                f"{run.get('tool_calls', 0)} tool call(s) · investigation {vm.format_ms(timings.get('total_ms'))} · "
+                f"total {vm.format_ms(response.get('api_time_ms'))} · model provider {run.get('llm_provider', '')}"
+            )
+        )

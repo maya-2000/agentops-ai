@@ -60,11 +60,13 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install
-        run: python -m pip install -e .
+        run: python -m pip install -e ".[api,ui]"
       - name: Generate the dataset
         run: python -m data.generator.generate
       - name: Critical suite (13 scenarios)
         run: python -m evals.run --suite critical --output reports/evaluation
+      - name: Investigation critical suite (eval_v2, 12 scenarios)
+        run: python -m evals.run --dataset eval_v2 --suite critical --output reports/evaluation
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4

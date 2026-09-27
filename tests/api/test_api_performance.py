@@ -59,3 +59,35 @@ def test_progress_reporting_and_presentation_are_cheap(full_db: Any) -> None:
             result = runner.run(question)
             presented = _median_ms(lambda r=result: build_response(r).model_dump_json())
             assert presented < 20.0, (question, presented)
+
+
+# ---- Phase 10: investigations (several tool calls per request) ----------------------------------------
+
+OBJECTIVES = [
+    "Why is revenue growth slowing?",
+    "Why did support tickets increase last month?",
+    "Give me a management brief on the current state of the business.",
+]
+
+
+def test_investigation_api_overhead_is_small_and_runs_are_bounded(full_db: Any) -> None:
+    from app.investigation import Investigator
+    from tests.phase10_support import INVESTIGATE
+
+    with api_client(full_db) as client:
+        runner: AgentRunner = client.app.state.service._runner  # type: ignore[attr-defined]
+        investigator = Investigator(runner.runtime)
+        overheads = []
+        for objective in OBJECTIVES:
+            investigator.investigate(objective)
+            client.post(INVESTIGATE, json={"objective": objective})  # warm-up
+            direct = _median_ms(lambda o=objective: investigator.investigate(o))
+            api = _median_ms(lambda o=objective: client.post(INVESTIGATE, json={"objective": o}))
+            overheads.append(api - direct)
+            result = investigator.investigate(objective)
+            assert len(result.tool_trace) <= runner.config.max_investigation_tool_calls
+            assert result.efficiency.duplicate_tool_calls == 0
+            assert result.timings.total_ms < 10_000, (objective, result.timings)
+            stages = result.timings
+            assert stages.execution_ms >= stages.understanding_ms + stages.planning_ms  # the tools dominate
+    assert statistics.median(overheads) < 50.0, overheads

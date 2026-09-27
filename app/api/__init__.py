@@ -34,6 +34,6 @@ Architecture and contract: ``docs/api.md``; deployment: ``docs/deployment.md``; 
 ``docs/security.md``.
 """
 
-API_VERSION = "0.9.0"
+API_VERSION = "0.10.0"
 API_PREFIX = "/api/v1"
 SCHEMA_VERSION = "1.0"

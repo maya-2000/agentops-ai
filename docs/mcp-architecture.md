@@ -539,6 +539,13 @@ A rejected request (`agentops_run_safe_sql` with `{"sql": "DROP TABLE customers"
 
 ## 15. Future integration possibilities
 
+**Phase 10 note.** Investigations (`POST /api/v1/investigations`, [investigations.md](investigations.md))
+are not exposed as an MCP tool, on purpose. MCP clients already get every analysis tool an
+investigation uses, behind the same secured executor. An investigation is a product workflow built from
+those calls, and a long-running multi-call tool would add no capability. The catalogue, schemas and
+server are unchanged (`tests/mcp/test_mcp_isolation.py`). The eval_v2 `mcp_parity` scenarios repeat
+every investigation step through the MCP server and check that the evidence is identical.
+
 - **Networked transport** (streamable HTTP) behind the Phase 8 API, with authentication
   (OAuth) and per-client quotas.
 - **An `agentops_ask` tool** that runs the full LangGraph agent and returns its evidence-backed

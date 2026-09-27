@@ -9,11 +9,12 @@ unauthenticated, throttled or wrongly typed request never reaches validation or 
   enumerated without a token. Missing, malformed and wrong credentials all get the same 401. The
   token is never logged, echoed or stored beyond the configuration; it is registered with the
   redaction utility so that it is removed from anything logged.
-- **Rate limiting.** ``POST /api/v1/ask`` and ``/ask/stream`` are limited per client (the peer
-  address) with a sliding window: at most N requests in any window. Excess requests get 429 with
-  ``Retry-After``. The state is in memory, bounded by ``API_RATE_LIMIT_MAX_CLIENTS`` (least-recently
-  seen clients are forgotten first), and per process.
-- **Content type.** The ask endpoints accept ``application/json`` only (415 otherwise).
+- **Rate limiting.** ``POST /api/v1/ask``, ``/ask/stream``, ``/investigations`` and
+  ``/investigations/stream`` share one limit per client (the peer address), with a sliding window:
+  at most N requests in any window. Excess requests get 429 with ``Retry-After``. The state is in
+  memory, bounded by ``API_RATE_LIMIT_MAX_CLIENTS`` (least-recently seen clients are forgotten
+  first), and per process.
+- **Content type.** The ask and investigation endpoints accept ``application/json`` only (415 otherwise).
 """
 
 from __future__ import annotations
@@ -36,7 +37,15 @@ from app.api.errors import APIError
 from app.security.redaction import register_secret
 
 PUBLIC_PATHS = frozenset({f"{API_PREFIX}/health", f"{API_PREFIX}/readiness"})
-RATE_LIMITED_PATHS = frozenset({f"{API_PREFIX}/ask", f"{API_PREFIX}/ask/stream"})
+# The agent endpoints: one question (/ask) or one investigation (Phase 10), plain or streamed.
+RATE_LIMITED_PATHS = frozenset(
+    {
+        f"{API_PREFIX}/ask",
+        f"{API_PREFIX}/ask/stream",
+        f"{API_PREFIX}/investigations",
+        f"{API_PREFIX}/investigations/stream",
+    }
+)
 JSON_TYPES = frozenset({"application/json"})
 
 

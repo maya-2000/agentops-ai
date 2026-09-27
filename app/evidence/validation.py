@@ -129,6 +129,16 @@ def _kpi_subject(claim: Claim) -> str | None:
     return metric if metric in _KPI_TERMS else None
 
 
+def recommendation_wording_problems(text: str) -> list[str]:
+    """A recommendation is a suggested next step: a suggestion verb, never a directive or a promised outcome."""
+    problems = []
+    if not _SUGGESTION_VERBS.search(text):
+        problems.append("a recommendation must be framed as a suggested next step")
+    if _DIRECTIVE_WORDS.search(text):
+        problems.append("a recommendation must not be a directive or promise an outcome")
+    return problems
+
+
 def causal_sentences(text: str) -> list[str]:
     """Sentences that assert causality (causal wording that is not negated)."""
     return [s for s in _SENTENCE.split(text) if _CAUSAL.search(s) and not _NEGATION.search(s)]
@@ -402,10 +412,7 @@ def _item_problems(
     if directions == {"increase"} and says_down and not says_up:
         problems.append(f"{section}: states a decrease but the cited evidence shows an increase")
     if section == "recommendations":
-        if not _SUGGESTION_VERBS.search(text):
-            problems.append("recommendations: a recommendation must be framed as a suggested next step")
-        if _DIRECTIVE_WORDS.search(text):
-            problems.append("recommendations: a recommendation must not be a directive or promise an outcome")
+        problems += [f"recommendations: {p}" for p in recommendation_wording_problems(text)]
     if section == "key_findings" and types and types <= {"inference", "recommendation"}:
         problems.append("key_findings: an inference or recommendation is presented as a finding")
     if section == "recommendations" and claims and "recommendation" not in types:

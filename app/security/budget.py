@@ -50,6 +50,25 @@ class RunBudget(BaseModel):
             max_response_chars=limits.max_response_chars,
         )
 
+    @classmethod
+    def for_investigation(cls, limits: SecurityLimits) -> RunBudget:
+        """The budget of one investigation (Phase 10): the same caps and charging rules, sized for several steps.
+
+        Investigations run template steps only, never ad-hoc SQL, so the SQL budget is zero. The model is
+        asked once (to understand the objective), within the retry budget.
+        """
+        return cls(
+            max_tool_calls=limits.max_investigation_tool_calls,
+            max_sql_calls=0,
+            max_sql_rows=limits.max_sql_rows_total,
+            max_retries_total=limits.max_retries * (limits.max_investigation_tool_calls + 1),
+            max_model_calls=limits.max_retries + 1,
+            max_runtime_seconds=limits.max_investigation_seconds,
+            max_context_items=limits.max_context_items,
+            max_context_chars=limits.max_context_chars,
+            max_response_chars=limits.max_investigation_output_chars,
+        )
+
 
 class BudgetUsage(BaseModel):
     tool_calls: int = 0

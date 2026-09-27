@@ -24,7 +24,7 @@ services:
     build:
       context: .
       target: api
-    image: agentops-api:0.9.0
+    image: agentops-api:0.10.0
     environment:
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:?Set API_AUTH_TOKEN in .env (see .env.example)}
       API_RATE_LIMIT: ${API_RATE_LIMIT:-20/minute}
@@ -48,7 +48,7 @@ services:
     build:
       context: .
       target: ui
-    image: agentops-ui:0.9.0
+    image: agentops-ui:0.10.0
     environment:
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:?Set API_AUTH_TOKEN in .env (see .env.example)}
       UI_API_URL: http://api:8000
