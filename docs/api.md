@@ -1,4 +1,4 @@
-# AgentOps HTTP API (Phases 8–9)
+# AgentOps HTTP API (Phases 8–10)
 
 The API makes the evidence-backed agent usable over HTTP. It is a thin transport: every question
 is answered by the existing Phase 4 agent (`AgentRunner.run`), whose tool calls go through the Phase
@@ -8,6 +8,9 @@ chart specifications. It adds no analytics, SQL, planning or permissions of its 
 - Code: `app/api/` (FastAPI). Start it with `python -m app.api` (or `agentops-api`).
 - Interactive schema: `http://127.0.0.1:8000/docs` (OpenAPI at `/openapi.json`); off in production.
 - The web UI (`app/ui/`, [ui.md](ui.md)) is a client of this API.
+- **Phase 10:** `POST /api/v1/investigations` and `/investigations/stream` run multi-step
+  investigations through the same service, security path and limits (§3a,
+  [investigations.md](investigations.md)). `/ask` is unchanged.
 
 **Phase 9: authenticated and rate-limited.**
 
@@ -77,6 +80,8 @@ or imports the MCP server. `tests/api/test_api_isolation.py` checks this statica
 |---|---|---|---|
 | `POST /api/v1/ask` | token | Ask a question; returns an `AskResponse` | 200 for every agent outcome (see §4) |
 | `POST /api/v1/ask/stream` | token | The same, as NDJSON progress events followed by one result or error event | 200 (request errors are returned before the stream starts) |
+| `POST /api/v1/investigations` | token | Investigate a business objective; returns an `InvestigationResponse` with the decision brief (Phase 10, §3a) | 200 for every investigation outcome |
+| `POST /api/v1/investigations/stream` | token | The same, as NDJSON progress events (stage, step, tool, status, duration), then one result or error event | 200 (request errors are returned before the stream starts) |
 | `GET /api/v1/health` | public | Liveness: `{"status": "ok", "version"}`. Checks nothing else | 200 |
 | `GET /api/v1/readiness` | public | Readiness: `status` (`ready` / `not_ready`), `version` and named boolean `checks` (configuration, database, agent, accepting_requests) | 200, or 503 when a check fails |
 | `GET /api/v1/capabilities` | token | KPIs, forecast and anomaly metrics, detectors, dimensions, analyses, outcomes, limits, example questions, what is not supported, dataset version, as-of date, provider name | 200 |
@@ -176,6 +181,54 @@ callback, because it records stage durations for the `run.stages` trace.
 `tests/api/test_api_streaming.py` shows that a streamed run concludes exactly like an invoked one:
 same status, answer, claims, evidence, tool calls, transitions and security events. It also shows
 that a failing observer cannot change a run.
+
+## 3a. Investigations (Phase 10)
+
+`POST /api/v1/investigations` runs an investigation ([investigations.md](investigations.md)).
+It uses the same `AgentService`: the same worker thread and database lock, and the same request
+timeout, queue bound, cancellation, authentication, rate limit (one shared quota with `/ask`),
+JSON-only rule, body limit, error envelope, request IDs, logs and metrics.
+
+Request (unknown fields are rejected, so no field can change a limit):
+
+```json
+{"objective": "Why is revenue growth slowing?", "request_id": "optional-id", "session_id": "optional"}
+```
+
+An empty objective gives 422 `empty_objective`. An objective longer than `AGENT_MAX_QUESTION_CHARS`
+gives 422 `objective_too_long`.
+
+Response (`InvestigationResponse`), all copied from the investigation, nothing recomputed:
+
+| Field | Content |
+|---|---|
+| `request_id`, `investigation_id` | Equal: the key of every log line and audit event of the investigation |
+| `status`, `outcome` | `completed` → `answered`, `budget_exhausted` → `partial`, `insufficient_evidence`, `refused`, `unsupported`, `failed` (also `cancelled`) |
+| `message`, `refusal` | A fixed explanation for any status but `completed`; refusal kind `policy` / `invalid_input` / `out_of_scope` |
+| `title`, `template`, `scope`, `period`, `comparison_period` | The investigation type and the validated request with its periods |
+| `plan` | Each step: title, area, tool, dependencies, condition, status, reason, duration, evidence IDs, reuse |
+| `brief` | Executive summary, key findings, drivers, contradictions, context, risks, recommendations, uncertainty, sections, `complete` |
+| `findings`, `relationships`, `claims`, `evidence` | The validated findings with their identity, their non-causal links, and every claim and evidence item |
+| `trace`, `kpis`, `forecasts`, `anomalies`, `visualizations` | The same views as `/ask`, built by the same presenter functions |
+| `run` | Tool calls, efficiency (steps, reuse, duplicates), stage timings, budget report, validation counts |
+
+Never included: prompts, model reasoning, security events, raw tool results, validation messages,
+stack traces, SQL error text, file paths, environment values or secrets.
+
+`POST /api/v1/investigations/stream` returns `application/x-ndjson`:
+
+```
+{"type":"progress","request_id":"R-…","stage":"started","label":"Investigation started","elapsed_ms":0.4}
+{"type":"progress","request_id":"R-…","stage":"plan","label":"Analysis plan ready: 11 steps","steps":[{"step_id":"S1","title":"Measure the revenue change",…}],…}
+{"type":"progress","request_id":"R-…","stage":"step_started","label":"Analyzing revenue: Compare region performance","step_id":"S2","tool_name":"analyze_revenue",…}
+{"type":"progress","request_id":"R-…","stage":"step_finished","label":"Compare region performance: completed","step_id":"S2","status":"completed","duration_ms":61.2,…}
+…
+{"type":"result","request_id":"R-…","data":{ …the same InvestigationResponse… }}
+```
+
+There is no `GET` status endpoint and no MCP investigation tool; [investigations.md §10](investigations.md#10-api)
+explains why. `GET /api/v1/capabilities` adds `investigation_types` (key and title) and
+`example_objectives`.
 
 ## 4. Outcomes, status codes and errors
 
@@ -331,6 +384,10 @@ All settings live in `app/config.py` and can be set as environment variables or 
 | `UI_API_URL` | `http://127.0.0.1:8000` | Where the UI sends questions |
 | `UI_REQUEST_TIMEOUT_SECONDS` | `180` | How long the UI waits |
 
+Phase 10 adds the investigation budgets `AGENT_MAX_INVESTIGATION_STEPS`, `…_TOOL_CALLS`,
+`…_SECONDS`, `…_EVIDENCE` and `…_OUTPUT_CHARS` ([investigations.md §9](investigations.md#9-investigation-budgets)).
+In production, `AGENT_MAX_INVESTIGATION_SECONDS` must not exceed `API_REQUEST_TIMEOUT_SECONDS`.
+
 Phase 9 adds `APP_ENV`, `API_AUTH_MODE`, `API_AUTH_TOKEN`, `API_RATE_LIMIT`,
 `API_RATE_LIMIT_MAX_CLIENTS`, `API_CORS_ORIGINS`, `API_DOCS_ENABLED`, `API_METRICS_ENABLED`,
 `API_SHUTDOWN_GRACE_SECONDS`, `LOG_FORMAT` and the `UI_*` launcher settings. They are described in
@@ -410,6 +467,12 @@ What the numbers show:
 
 Agent time still dominates: the forecast's model selection and backtests take about 320 ms.
 
+**Investigations (Phase 10).** On the full dataset, the revenue, customer, support and management
+brief investigations take 220–874 ms for 9–12 tool calls. The API overhead over the investigation
+itself is within measurement noise, and `tests/api/test_api_performance.py` guards its median at 50
+ms. Response bodies are 125–160 KB, mostly evidence, claims and chart specs. Details:
+[investigations.md §12](investigations.md#12-evaluation).
+
 ## 11. Known limitations
 
 - **One shared token, no user accounts; no TLS in the process.** Terminate TLS and add user
@@ -426,3 +489,6 @@ Agent time still dominates: the forecast's model selection and backtests take ab
   database error text.
 - **The chart set is fixed** by the evidence shapes above. Questions whose evidence has no
   chartable shape get tables and evidence only.
+- **Investigations are synchronous.** They run to completion within the request timeout, and are
+  not stored or retrievable later. Investigation responses are larger than `/ask` responses (all the
+  evidence of up to 16 tool calls).

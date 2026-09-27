@@ -115,7 +115,7 @@ All settings are environment variables (or `.env`), declared and validated in `a
 | Rate limit | on (default `20/minute`), may be `off` | must be on |
 | CORS origins | any explicit origins | no `*`, no `http://` |
 | `DATABASE_URL` | default location if unset | must be set explicitly |
-| Timeouts | as set | must nest: SQL ≤ tool ≤ agent run ≤ API request ≤ UI request |
+| Timeouts | as set | must nest: SQL ≤ tool ≤ agent run ≤ API request ≤ UI request, and tool ≤ investigation ≤ API request |
 | OpenAPI docs (`/docs`) | on | off (unless `API_DOCS_ENABLED=true`) |
 | Streamlit | error details, full toolbar | no error details, viewer toolbar |
 
@@ -131,7 +131,7 @@ Phase 9 settings:
 | `LOG_LEVEL` | `INFO` | Root log level |
 | `API_AUTH_MODE` | `token` | `token` or `disabled` (development only) |
 | `API_AUTH_TOKEN` | — | Bearer token, at least 32 characters, no whitespace |
-| `API_RATE_LIMIT` | `20/minute` | Per-client limit on `/ask` and `/ask/stream`: `N/second`, `N/minute`, `N/hour` or `off` |
+| `API_RATE_LIMIT` | `20/minute` | Per-client limit, one quota for `/ask`, `/ask/stream`, `/investigations` and `/investigations/stream`: `N/second`, `N/minute`, `N/hour` or `off` |
 | `API_RATE_LIMIT_MAX_CLIENTS` | `10000` | Clients tracked by the limiter (least recently seen are dropped first) |
 | `API_CORS_ORIGINS` | empty | Comma-separated `scheme://host[:port]` origins; empty = no cross-origin access |
 | `API_DOCS_ENABLED` | empty | Empty = on except in production |
@@ -143,6 +143,16 @@ Phase 9 settings:
 | `UI_HOST` / `UI_PORT` | `127.0.0.1` / `8501` | Where `python -m app.ui` listens |
 | `UI_PUBLIC_ADDRESS` | `localhost` | The host name users browse to |
 | `UI_HISTORY_LIMIT` | `20` | Questions kept per browser session, in memory |
+
+Phase 10 settings (investigation budgets, [investigations.md §9](investigations.md#9-investigation-budgets)):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AGENT_MAX_INVESTIGATION_STEPS` | `14` | Planned steps that may run |
+| `AGENT_MAX_INVESTIGATION_TOOL_CALLS` | `16` | Tool calls across all steps |
+| `AGENT_MAX_INVESTIGATION_SECONDS` | `120` | Wall clock of one investigation (≤ `API_REQUEST_TIMEOUT_SECONDS` in production) |
+| `AGENT_MAX_INVESTIGATION_EVIDENCE` | `400` | Evidence items one investigation keeps |
+| `AGENT_MAX_INVESTIGATION_OUTPUT_CHARS` | `12000` | Decision brief text |
 
 Why `20/minute`: a deterministic run takes 5–500 ms, so an interactive user rarely asks more than a
 few questions a minute. Twenty allows bursts (a demo, example questions clicked in a row) and still
@@ -173,8 +183,10 @@ API. User sign-in, if needed, belongs in the reverse proxy in front of the UI.
 
 ## 5. Rate limiting
 
-- `POST /api/v1/ask` and `/ask/stream` are limited per client with a sliding window: at most N
-  requests in any window (not a fixed per-minute bucket, so there is no burst at window edges).
+- `POST /api/v1/ask`, `/ask/stream`, `/investigations` and `/investigations/stream` share one
+  per-client limit with a sliding window: at most N requests in any window (not a fixed per-minute
+  bucket, so there is no burst at window edges). An investigation counts as one request, although
+  it runs up to `AGENT_MAX_INVESTIGATION_TOOL_CALLS` tool calls.
 - The 21st request within a minute gets `429`, `{"error": {"code": "rate_limited", …}}` and
   `Retry-After` (seconds until a slot frees). Rejected requests do not consume the quota.
 - The check comes after authentication, so unauthenticated floods are answered with 401 and cannot
@@ -188,7 +200,7 @@ API. User sign-in, if needed, belongs in the reverse proxy in front of the UI.
   deployment; several API replicas would need a shared store (for example Redis), which is out of
   scope.
 
-Other request limits: `application/json` only on the ask endpoints (415), `API_MAX_REQUEST_BYTES`
+Other request limits: `application/json` only on the ask and investigation endpoints (415), `API_MAX_REQUEST_BYTES`
 (413, declared or streamed), `AGENT_MAX_QUESTION_CHARS` (422), request and session IDs of at most 64
 safe characters, unknown fields rejected, and `API_MAX_PENDING_REQUESTS` (503 `busy`).
 
@@ -329,7 +341,8 @@ Runs are tracked in memory only as counters (queued, running, stopping, final st
 ## 12. Known limitations
 
 - **One API process, one run at a time.** DuckDB is opened read-only by one connection, and runs
-  are serialised. Throughput is roughly 3–35 questions per second with the deterministic model,
+  (questions and investigations alike) are serialised; an investigation takes 0.2–0.9 s on the full
+  dataset. Throughput is roughly 3–35 questions per second with the deterministic model,
   far lower with a network model. Scaling out means several API containers, each with its own
   mounted copy, behind a load balancer. The in-memory rate limit and metrics would then be per
   replica.
