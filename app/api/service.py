@@ -10,7 +10,9 @@ service adds nothing to the analysis. It owns:
   waiting requests (``API_MAX_PENDING_REQUESTS``, 503 beyond it);
 - a start-up snapshot for readiness and capabilities (dataset version, as-of date, data coverage,
   provider name);
-- a ``RunTracker`` (``runs.py``) of queued and running runs, for metrics and graceful shutdown.
+- a ``RunTracker`` (``runs.py``) of queued and running runs, for metrics and graceful shutdown;
+- the ``Investigator`` (Phase 10) on the same runtime: an investigation is one more kind of run, on the same
+  worker, lock, timeout, queue bound and cancellation as a question.
 
 Bounded execution (Phase 9). Each run gets a cancel event and a deadline: the time left of the
 request's budget when it starts. The agent stops at its next graph node once either fires. Database
@@ -25,10 +27,12 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from functools import partial
+from typing import Literal, TypeVar
 
 from app.agent.records import AgentStatus
 from app.agent.runner import AgentRunner, AgentRunResult, ProgressCallback
@@ -37,6 +41,10 @@ from app.api.errors import APIError
 from app.api.observability import log_service
 from app.api.runs import LiveRun, RunState, RunTracker
 from app.database import Database, get_database
+from app.investigation import Investigation, InvestigationStatus, Investigator
+from app.investigation import ProgressCallback as InvestigationProgress
+
+T = TypeVar("T")
 
 _RUN_STATES: dict[AgentStatus, RunState] = {
     "completed": "completed",
@@ -45,6 +53,17 @@ _RUN_STATES: dict[AgentStatus, RunState] = {
     "unsupported_request": "refused",
     "tool_error": "failed",
     "planning_failure": "failed",
+    "running": "failed",
+}
+_INVESTIGATION_STATES: dict[InvestigationStatus, RunState] = {
+    "completed": "completed",
+    "insufficient_evidence": "completed",
+    "budget_exhausted": "completed",
+    "refused": "refused",
+    "unsupported": "refused",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "planned": "failed",
     "running": "failed",
 }
 
@@ -80,6 +99,7 @@ class AgentService:
         self._pending = 0  # changed only on the event loop
         self.runs = RunTracker()
         self.draining = False  # set when shutdown starts: new requests get 503, readiness reports not ready
+        self._investigator: Investigator | None = None
         self.snapshot = self._take_snapshot()
 
     # ------------------------------------------------------------------ construction
@@ -156,15 +176,22 @@ class AgentService:
             raise APIError("busy")
 
     async def run(self, question: str, request_id: str, *, on_progress: ProgressCallback | None = None) -> ServiceRun:
+        return await self._submit(request_id, partial(self._run_serialised, question, request_id, on_progress))
+
+    async def investigate(
+        self, objective: str, request_id: str, *, on_progress: InvestigationProgress | None = None
+    ) -> Investigation:
+        """One investigation (Phase 10): the same worker, lock, timeout, queue bound and cancellation as a question."""
+        return await self._submit(request_id, partial(self._investigate_serialised, objective, request_id, on_progress))
+
+    async def _submit(self, request_id: str, work: Callable[[LiveRun, float], T | None]) -> T:
         self.check_capacity()
         live = self.runs.queued(request_id)
         self._pending += 1
         started = time.monotonic()
         try:
             loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(
-                self._executor, self._run_serialised, question, request_id, on_progress, live, started
-            )
+            future = loop.run_in_executor(self._executor, work, live, started)
             result = await asyncio.wait_for(future, timeout=self.config.request_timeout_seconds)
             if result is None:  # cancelled before it started (shutdown)
                 raise APIError("shutting_down")
@@ -177,6 +204,37 @@ class AgentService:
             raise
         finally:
             self._pending -= 1
+
+    def _investigate_serialised(
+        self,
+        objective: str,
+        request_id: str,
+        on_progress: InvestigationProgress | None,
+        live: LiveRun,
+        request_started: float,
+    ) -> Investigation | None:
+        assert self._runner is not None
+        if live.cancel.is_set():
+            self.runs.finished(live, "cancelled")
+            return None
+        state: RunState = "failed"
+        try:
+            with self._lock:
+                self.runs.running(live)
+                if self._investigator is None:
+                    self._investigator = Investigator(self._runner.runtime)
+                remaining = self.config.request_timeout_seconds - (time.monotonic() - request_started)
+                investigation = self._investigator.investigate(
+                    objective,
+                    investigation_id=request_id,
+                    cancel=live.cancel,
+                    deadline_seconds=max(0.0, remaining),
+                    on_progress=on_progress,
+                )
+            state = _INVESTIGATION_STATES.get(investigation.status, "failed")
+            return investigation
+        finally:
+            self.runs.finished(live, state)
 
     def _abandon(self, live: LiveRun, reason: Literal["timeout", "cancelled"]) -> None:
         """Stop a run nobody will read: a queued run is dropped; a running one stops at its next step."""

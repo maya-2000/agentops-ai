@@ -2,10 +2,12 @@
 
     UI (app/ui) --HTTP--> API (app/api) --> AgentRunner.run --> tools --> security/execution --> data
 
-- The API reaches the agent only through ``AgentRunner.run`` in ``service.py``. It imports result
-  types and registries (names, units, descriptions), never a service, a tool handler, the secured
-  executor, the database driver or the MCP server, and it runs no query of its own except the health
-  probe's metadata query and the start-up coverage lookup of the agent's own KPI service.
+- The API reaches the agent only through ``AgentRunner.run`` in ``service.py``, and investigations
+  (Phase 10) only through ``Investigator.investigate`` on the same runner's runtime, also in
+  ``service.py``. It imports result types and registries (names, units, descriptions), never a service,
+  a tool handler, the secured executor, the database driver or the MCP server, and it runs no query of
+  its own except the health probe's metadata query and the start-up coverage lookup of the agent's own
+  KPI service.
 - The UI imports only Streamlit, httpx, the standard library, ``app.config`` and itself: no agent,
   API, analytics, tool, evidence, security or database code. It reaches the API over HTTP only.
 - Neither layer reads files, the environment or the hidden evaluation labels, or executes code.
@@ -34,6 +36,7 @@ API_APP_IMPORTS = {
     "app.agent.response",  # AgentResponse and the user-safe trace entries
     "app.agent.runner",  # AgentRunner: the only way to run the agent
     "app.analytics.dimensions",  # display names
+    "app.analytics.labels",  # metric and dimension display names (Phase 10: shared with investigations)
     "app.analytics.kpis",  # KPI registry: names, units, definitions
     "app.analytics.models",  # the Scalar type
     "app.analytics.periods",  # the Period type
@@ -43,6 +46,9 @@ API_APP_IMPORTS = {
     "app.database",  # get_database (opened once, read-only) and the Database protocol
     "app.evidence.models",  # Claim and Evidence (serialised as is)
     "app.forecasting",  # the ForecastResult type
+    "app.investigation",  # Investigator (constructed in service.py only) and the Investigation result type
+    "app.investigation.models",  # investigation result types (serialised by the presenter)
+    "app.investigation.templates",  # template titles for /capabilities
     "app.logs",  # JSON log formatting (Phase 9)
     "app.security.redaction",  # log redaction
     "app.timeseries",  # series-metric registry: names and units
@@ -119,6 +125,15 @@ def test_the_agent_is_constructed_and_run_only_by_the_service() -> None:
     for path in API:
         code = path.read_text(encoding="utf-8")
         assert "build_graph" not in code and "graph.invoke" not in code and "graph.stream" not in code, path
+
+
+def test_investigations_are_constructed_and_run_only_by_the_service() -> None:
+    service = (APP / "api" / "service.py").read_text(encoding="utf-8")
+    assert "Investigator(self._runner.runtime)" in service and "self._investigator.investigate(" in service
+    for path in API:
+        if _id(path) != "api/service.py":
+            code = path.read_text(encoding="utf-8")
+            assert "Investigator(" not in code and ".runtime" not in code, path
 
 
 @pytest.mark.parametrize("path", UI, ids=_id)

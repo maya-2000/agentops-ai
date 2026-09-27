@@ -35,7 +35,7 @@ from app.api.config import APIConfig
 from app.api.errors import APIError, ErrorCode
 from app.api.middleware import RequestContextMiddleware
 from app.api.observability import RequestMetrics, log_service
-from app.api.routes import ask_router, system_router
+from app.api.routes import ask_router, investigations_router, system_router
 from app.api.schemas.responses import FieldIssue
 from app.api.security import AccessControlMiddleware, SlidingWindowRateLimiter
 from app.api.service import AgentService
@@ -164,6 +164,7 @@ def create_app(service: AgentService | None = None, *, config: APIConfig | None 
         return {"name": "AgentOps AI API", "version": API_VERSION, "api": API_PREFIX}
 
     app.include_router(ask_router)
+    app.include_router(investigations_router)
     app.include_router(system_router)
     return app
 
