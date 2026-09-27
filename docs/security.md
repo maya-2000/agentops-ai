@@ -1,4 +1,4 @@
-# AgentOps security (Phases 9–10)
+# AgentOps security (Phases 9–11)
 
 This is the security model of the deployable application: what protects the HTTP entry points,
 the agent, the data and the operators' secrets. It summarises and links the detailed documents:
@@ -175,7 +175,7 @@ Details: [security-architecture.md §8](security-architecture.md#8-sql-security-
 |---|---|---|
 | Rate limit on `/ask`, `/ask/stream`, `/investigations`, `/investigations/stream` (one quota per client, sliding window) | `API_RATE_LIMIT`, default `20/minute`; must be on in production | 429 `rate_limited` + `Retry-After` |
 | Body size (declared or streamed) | `API_MAX_REQUEST_BYTES` (16 KB) | 413 `request_too_large` |
-| Content type on the ask endpoints | `application/json` only | 415 `unsupported_media_type` |
+| Content type on the ask and investigation endpoints | `application/json` only | 415 `unsupported_media_type` |
 | Question or objective length | `AGENT_MAX_QUESTION_CHARS` (1,000) | 422 `question_too_long` / `objective_too_long` |
 | Request and session IDs | 64 safe characters | body: 422; header: replaced, never echoed |
 | Waiting requests | `API_MAX_PENDING_REQUESTS` (4) | 503 `busy` + `Retry-After` |
@@ -244,3 +244,35 @@ Verified in tests (`test_the_token_never_reaches_responses_or_logs`, the log-hyg
 - **TLS is external.** The services speak plain HTTP and rely on the proxy and network placement.
 - **A network model provider** (`LLM_PROVIDER=anthropic`) sends questions and evidence summaries to
   the provider. The deterministic default sends nothing anywhere.
+
+## 13. Final release verification (0.10.0)
+
+Phase 11 reviewed each control against the code and the tests that enforce it. No control was
+changed, weakened or replaced.
+
+| Control | Implementation | Verified by |
+|---|---|---|
+| Bearer-token authentication, uniform 401 for missing, malformed and wrong tokens | `AccessControlMiddleware` runs before routing and before the body is read | `tests/api/test_api_production.py` |
+| Constant-time comparison | `hmac.compare_digest` in `TokenAuthenticator.verify` | code review; `tests/api/test_api_production.py` |
+| Production configuration | `APP_ENV=production` refuses: no token, disabled auth, rate limit off, wildcard or HTTP origins, an implicit database, non-nested timeouts (including the investigation timeout) | `tests/api/test_api_production.py`, `tests/api/test_api_investigations.py` |
+| Rate limiting | Per-client sliding window, one quota for `/ask`, `/ask/stream`, `/investigations` and `/investigations/stream`; 429 with `Retry-After` | `tests/api/test_api_production.py`, `tests/api/test_api_investigations.py`, `scripts/smoke_test.py` |
+| Request and run IDs | Validated or replaced request IDs; the run and investigation ID equals the request ID | `tests/api/test_api_production.py`, `tests/api/test_api_investigations.py` |
+| Safe logging | JSON lines with IDs, routes, outcomes and durations; no questions, objectives, answers, tokens, keys or tracebacks | `tests/api/test_api_security.py`, `tests/api/test_api_runtime.py`, `tests/api/test_api_investigations.py`, `tests/security/test_secret_protection.py` |
+| SQL restrictions | One read-only `SELECT`, allow-listed tables and columns, complexity limits, row cap, timeout, read-only connection; never allowed in investigations | `tests/security/test_sql_attacks.py`, `tests/unit/test_sql_safety.py`, `tests/security/test_investigation_security.py` |
+| Tool authorisation | Allow-list, intent permissions, argument checks and data-exposure policy, applied to every call from the agent, investigator and MCP | `tests/security/test_tool_authorization.py`, `tests/security/test_investigation_security.py`, `tests/mcp/test_mcp_security.py` |
+| Execution budgets and output limits | `RunBudget` / `BudgetUsage`; response and brief size caps | `tests/security/test_resource_limits.py`, `tests/integration/test_investigation_engine.py` |
+| Investigation budgets | Steps, tool calls, runtime, evidence and output, enforced before every step; stop means `budget_exhausted` | `tests/integration/test_investigation_engine.py`, `tests/security/test_investigation_security.py`, eval_v2 `budget_enforcement` |
+| Timeouts and cancellation | Tool and SQL timeouts; the API timeout, client disconnect and shutdown cancel a run before its next step | `tests/api/test_api_runtime.py`, `tests/api/test_api_investigations.py`, eval_v2 `cancellation` |
+| Ground-truth isolation | No application code reads the labels; an audit hook shows no file, process or network access during agent and investigation runs; label text never reaches prompts, logs or results | `tests/security/test_ground_truth_isolation.py`, `tests/evals/test_eval_boundary.py`, `tests/unit/test_investigation_isolation.py` |
+| Docker | Non-root uid 10001, read-only root filesystem, `cap_drop: ALL`, `no-new-privileges`, localhost-only ports, read-only data mounts, no secrets, data, tests or evals in the images | `tests/deploy/test_deployment.py`, the Docker smoke test |
+
+Results of the final run:
+
+- **Tests:** the full suite, 2,988 tests, passes (including every security, MCP, API, deployment and
+  Docker runtime test).
+- **Security benchmark:** eval_v1 passes 32/32 (10 security, 10 prompt injection, 6 SQL, 6 data
+  exposure).
+- **Investigations:** the eval_v2 security and budget-enforcement categories pass.
+- **Live checks:** the Docker smoke test passes 15/15 against the hardened containers. The API log
+  holds neither the objective text nor the token.
+
