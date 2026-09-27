@@ -1,4 +1,4 @@
-# AgentOps web UI (Phases 8–10)
+# AgentOps web UI (Phases 8–11)
 
 A Streamlit page where a business user asks a question and sees the answer, the evidence behind
 it, and how it was produced. The UI is a client of the [HTTP API](api.md).
@@ -58,7 +58,7 @@ for development.
 | Charts | Vega-Lite charts drawn from the chart specs: period comparison, breakdown bars (the tool's order; two neutral colours for sign), monthly series, forecast (history + forecast + interval band), anomaly (series, expected line and range, markers on flagged months). Breakdown tables sit in expanders | `visualizations` |
 | Evidence & Provenance | A table of every evidence item: statement, metric, value, period, comparison, dimension, filters, source tables, calculation, query IDs and tool | `evidence` |
 | Analysis Trace | The agent's stages with ✓ (or ■ where the run stopped) and durations. Under "Running analysis tools", each tool call with ✓/✗, time and the plan's purpose, plus totals | `run.stages`, `trace` |
-| Earlier in this session | Previous questions with their outcome and answer | session state |
+| Earlier in this session | Previous questions and investigations with their outcome and answer or summary | session state |
 
 What is deliberately not shown: prompts, model reasoning, raw tool arguments, security events and
 their pattern names, and anything the API does not return.
@@ -77,10 +77,10 @@ no multipage dashboard. Investigation Mode calls `POST /api/v1/investigations/st
 | Header | The objective, the investigation type, the periods compared, the request ID, and a status banner ("Investigation complete", "Investigation stopped: the analysis budget was reached", insufficient evidence, refusal) | `title`, `period`, `comparison_period`, `outcome` |
 | Analysis plan | Each step with its mark, title, tool, duration, and the reason it was skipped or not run | `plan` |
 | Executive summary | The validated summary | `brief.executive_summary` |
-| Key findings | One card per key finding, labelled **Observed** / **Calculated** / **Inferred**, with its area and evidence IDs; the outcome in bold | `brief.key_finding_ids`, `findings` |
+| Key findings | One card per key finding, labelled **Observed** / **Calculated** / **Inferred**, with its area, evidence IDs and what the label means (as in Ask mode); the outcome in bold | `brief.key_finding_ids`, `findings` |
 | Drivers and contributing factors | Each driver with its relationship ("Contributes to the change (accounting share)", "Moved in line with the outcome (same period)", "Associated (observed before churn)"), statement, share, confidence, findings and evidence, captioned as not established causes | `brief.drivers` |
 | Contradicting signals | Indicators that moved the other way | `brief.contradictions` |
-| Risks, Recommendations | Adverse movements; recommendations marked **Recommended**, each with its rationale (the findings it rests on) and uncertainty | `brief.risks`, `brief.recommendations` |
+| Risks, Recommendations | Adverse movements; recommendations marked **Recommended** ("a suggested next step, not a finding"), each with its rationale (the findings it rests on) and uncertainty | `brief.risks`, `brief.recommendations` |
 | Management-brief sections | One expander per business area that produced validated findings | `brief.sections` |
 | Uncertainty, assumptions | The brief's uncertainty notes and the default-period assumptions | `brief.uncertainty`, `scope.assumptions` |
 | Visualizations, evidence, trace | The Phase 8 KPI cards, charts, forecast and anomaly panels, "Evidence & Provenance" table and "Analysis Trace", reused unchanged | `kpis`, `visualizations`, `forecasts`, `anomalies`, `evidence`, `trace`, `run` |
@@ -104,7 +104,8 @@ Security implementation details (patterns, screening categories, policies) are n
 
 ## Session history
 
-Questions and answers of the current browser session are kept in `st.session_state`. Memory is
+Questions, investigations and their results from the current browser session are kept in
+`st.session_state`. Memory is
 bounded:
 
 - at most `UI_HISTORY_LIMIT` entries (default 20), newest first;
